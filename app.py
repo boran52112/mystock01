@@ -3,9 +3,10 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from FinMind.data import DataLoader # <-- 引入台灣本土籌碼 API
+from FinMind.data import DataLoader
 from datetime import datetime, timedelta
 
+# 設定網頁標題與排版
 st.set_page_config(page_title="個人股票技術分析系統", layout="wide")
 st.title("📈 個人股票技術分析系統")
 
@@ -20,37 +21,56 @@ with col2:
 
 st.write("---") 
 
-# --- 新增：抓取台灣三大法人籌碼 ---
+# --- 抓取台灣本土籌碼資料 (法人 + 融資券) ---
 def fetch_chip_data(code):
     try:
         dl = DataLoader()
-        # 抓取過去 60 天的資料就夠用了
         start_date = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
-        df_inst = dl.taiwan_stock_institutional_investors(stock_id=code, start_date=start_date)
         
-        if df_inst.empty:
+        # 1. 抓取三大法人買賣超
+        df_inst = dl.taiwan_stock_institutional_investors(stock_id=code, start_date=start_date)
+        df_pivot = pd.DataFrame()
+        if not df_inst.empty:
+            df_pivot = df_inst.pivot_table(index='date', columns='name', values='buy_sell', aggfunc='sum').reset_index()
+            df_pivot.rename(columns={'date': 'Date'}, inplace=True)
+            
+            if '外陸資買賣超股數(不含外資自營商)' in df_pivot.columns:
+                df_pivot['Foreign_Buy'] = df_pivot['外陸資買賣超股數(不含外資自營商)'] / 1000
+            else:
+                df_pivot['Foreign_Buy'] = 0
+                
+            if '投信買賣超股數' in df_pivot.columns:
+                df_pivot['Trust_Buy'] = df_pivot['投信買賣超股數'] / 1000
+            else:
+                df_pivot['Trust_Buy'] = 0
+                
+            df_pivot = df_pivot[['Date', 'Foreign_Buy', 'Trust_Buy']]
+
+        # 2. 抓取融資融券 (散戶指標)
+        df_margin = dl.taiwan_stock_margin_purchase_short_sale(stock_id=code, start_date=start_date)
+        if not df_margin.empty:
+            df_margin = df_margin[['date', 'MarginPurchaseTodayBalance', 'ShortSaleTodayBalance']]
+            df_margin.rename(columns={
+                'date': 'Date', 
+                'MarginPurchaseTodayBalance': 'Margin_Bal', # 融資餘額
+                'ShortSaleTodayBalance': 'Short_Bal'        # 融券餘額
+            }, inplace=True)
+            
+        # 3. 合併法人與資券資料
+        if not df_pivot.empty and not df_margin.empty:
+            df_final_chip = pd.merge(df_pivot, df_margin, on='Date', how='outer')
+        elif not df_pivot.empty:
+            df_final_chip = df_pivot
+        elif not df_margin.empty:
+            df_final_chip = df_margin
+        else:
             return None
 
-        # 整理 FinMind 複雜的資料格式，轉換成以「日期」為基準的表格
-        df_pivot = df_inst.pivot_table(index='date', columns='name', values='buy_sell', aggfunc='sum').reset_index()
-        df_pivot.rename(columns={'date': 'Date'}, inplace=True)
-        
-        # 為了避免某些股票沒有投信或外資資料，做個安全防護
-        if '外陸資買賣超股數(不含外資自營商)' in df_pivot.columns:
-            df_pivot['Foreign_Buy'] = df_pivot['外陸資買賣超股數(不含外資自營商)'] / 1000 # 換算成「張」
-        else:
-            df_pivot['Foreign_Buy'] = 0
-            
-        if '投信買賣超股數' in df_pivot.columns:
-            df_pivot['Trust_Buy'] = df_pivot['投信買賣超股數'] / 1000
-        else:
-            df_pivot['Trust_Buy'] = 0
-
-        return df_pivot[['Date', 'Foreign_Buy', 'Trust_Buy']]
+        return df_final_chip
     except Exception as e:
         return None
 
-# DB1：原始資料庫 (雙核心合併版)
+# DB1：原始資料庫 (價量 + 籌碼)
 def fetch_stock_data(code):
     df_price, symbol = None, None
     for suffix in [".TW", ".TWO"]:
@@ -70,25 +90,26 @@ def fetch_stock_data(code):
     if df_price is None:
         return None, None, False
 
-    # 嘗試抓取籌碼資料並「合併 (Merge)」
+    # 合併籌碼資料
     df_chip = fetch_chip_data(code)
     has_chip_data = False
     if df_chip is not None:
-        # 將價格表和籌碼表，用「日期」像拉鍊一樣接起來！(左外部連接)
         df_price = pd.merge(df_price, df_chip, on='Date', how='left')
-        df_price['Foreign_Buy'].fillna(0, inplace=True)
-        df_price['Trust_Buy'].fillna(0, inplace=True)
+        df_price.fillna(0, inplace=True) # 沒資料的日子補 0
         has_chip_data = True
     else:
-        # 如果 API 異常，塞入 0 讓程式不會崩潰
         df_price['Foreign_Buy'] = 0
         df_price['Trust_Buy'] = 0
+        df_price['Margin_Bal'] = 0
+        df_price['Short_Bal'] = 0
         
     return df_price, symbol, has_chip_data
 
-# DB2：技術分析資料庫
+# DB2：技術分析資料庫 (加入融資券增減計算)
 def generate_db2(df):
     db2 = df.copy()
+    
+    # 價格技術指標
     db2['SMA_5'] = db2['Close'].rolling(window=5).mean()
     db2['SMA_20'] = db2['Close'].rolling(window=20).mean()
     
@@ -119,11 +140,20 @@ def generate_db2(df):
     
     db2['Prev_High'] = db2['High'].shift(1)
     db2['Prev_Low'] = db2['Low'].shift(1)
+    db2['Prev_Close'] = db2['Close'].shift(1)
+    
+    # 籌碼指標 (計算今日增減)
+    if 'Margin_Bal' in db2.columns and 'Short_Bal' in db2.columns:
+        db2['Margin_Diff'] = db2['Margin_Bal'].diff()
+        db2['Short_Diff'] = db2['Short_Bal'].diff()
+    else:
+        db2['Margin_Diff'] = 0
+        db2['Short_Diff'] = 0
     
     db2.dropna(inplace=True) 
     return db2.round(2)
 
-# DB3：結論與矛盾分析 
+# DB3：結論與矛盾分析 (九大武器大腦)
 def generate_db3(db2, has_chip):
     latest = db2.iloc[-1]
     date = latest['Date']
@@ -132,7 +162,7 @@ def generate_db3(db2, has_chip):
     analysis_list = []
     bull_count, bear_count = 0, 0
     
-    # [1~7: 技術指標區塊保持原樣]
+    # 1. 均線
     if latest['SMA_5'] > latest['SMA_20']:
         analysis_list.append(["1. 均線理論", "🟢 看多", "5日線大於20日線"])
         bull_count += 1
@@ -140,6 +170,7 @@ def generate_db3(db2, has_chip):
         analysis_list.append(["1. 均線理論", "🔴 看空", "5日線小於20日線"])
         bear_count += 1
         
+    # 2. RSI
     if latest['RSI_14'] > 75:
         analysis_list.append(["2. 動能理論 (RSI)", "🔴 看空", f"RSI為 {latest['RSI_14']} (超買)"])
         bear_count += 1
@@ -149,13 +180,15 @@ def generate_db3(db2, has_chip):
     else:
         analysis_list.append(["2. 動能理論 (RSI)", "⚪ 中立", "正常震盪"])
         
+    # 3. MACD
     if latest['MACD_Hist'] > 0:
-        analysis_list.append(["3. 波段理論 (MACD)", "🟢 看多", "柱狀圖為正"])
+        analysis_list.append(["3. 波段理論 (MACD)", "🟢 看多", "MACD紅柱，多方動能"])
         bull_count += 1
     else:
-        analysis_list.append(["3. 波段理論 (MACD)", "🔴 看空", "柱狀圖為負"])
+        analysis_list.append(["3. 波段理論 (MACD)", "🔴 看空", "MACD綠柱，空方動能"])
         bear_count += 1
         
+    # 4. 布林通道
     if latest['Close'] > latest['BB_Up']:
         analysis_list.append(["4. 布林通道", "🟢 看多", "突破上軌"])
         bull_count += 1
@@ -165,6 +198,7 @@ def generate_db3(db2, has_chip):
     else:
         analysis_list.append(["4. 布林通道", "⚪ 中立", "通道內游走"])
         
+    # 5. KD 指標
     if latest['K'] > 80 and latest['D'] > 80:
         analysis_list.append(["5. KD 指標", "🔴 看空", "高檔超買"])
         bear_count += 1
@@ -174,6 +208,7 @@ def generate_db3(db2, has_chip):
     else:
         analysis_list.append(["5. KD 指標", "⚪ 中立", "數值居中"])
 
+    # 6. K線型態
     body = abs(latest['Close'] - latest['Open'])
     lower_shadow = min(latest['Close'], latest['Open']) - latest['Low']
     upper_shadow = latest['High'] - max(latest['Close'], latest['Open'])
@@ -187,6 +222,7 @@ def generate_db3(db2, has_chip):
     else:
         analysis_list.append(["6. K線型態", "⚪ 中立", "無特殊型態"])
         
+    # 7. 缺口理論
     if latest['Low'] > latest['Prev_High']:
         analysis_list.append(["7. 缺口理論", "🟢 看多", "向上跳空缺口"])
         bull_count += 1
@@ -196,48 +232,65 @@ def generate_db3(db2, has_chip):
     else:
         analysis_list.append(["7. 缺口理論", "⚪ 中立", "無跳空缺口"])
 
-    # --- 8. 新增籌碼理論 (三大法人) ---
+    # --- 籌碼區塊 ---
     if has_chip:
-        # 計算近3日外資與投信的總買賣超
+        # 8. 法人籌碼
         recent_3_days = db2.tail(3)
         foreign_3d_sum = recent_3_days['Foreign_Buy'].sum()
         trust_3d_sum = recent_3_days['Trust_Buy'].sum()
         
-        desc_chip = f"近三日外資買賣: {int(foreign_3d_sum)}張, 投信買賣: {int(trust_3d_sum)}張"
-        
+        desc_inst = f"近三日外資:{int(foreign_3d_sum)}張, 投信:{int(trust_3d_sum)}張"
         if trust_3d_sum > 500 or foreign_3d_sum > 2000:
-            analysis_list.append(["8. 籌碼理論 (法人)", "🟢 看多", desc_chip + " (法人積極買超)"])
+            analysis_list.append(["8. 籌碼理論 (法人)", "🟢 看多", desc_inst + " (積極買超)"])
             bull_count += 1
         elif trust_3d_sum < -500 or foreign_3d_sum < -2000:
-            analysis_list.append(["8. 籌碼理論 (法人)", "🔴 看空", desc_chip + " (法人積極賣超)"])
+            analysis_list.append(["8. 籌碼理論 (法人)", "🔴 看空", desc_inst + " (積極賣超)"])
             bear_count += 1
         else:
-            analysis_list.append(["8. 籌碼理論 (法人)", "⚪ 中立", desc_chip + " (法人動作不大)"])
+            analysis_list.append(["8. 籌碼理論 (法人)", "⚪ 中立", desc_inst + " (動作不大)"])
+            
+        # 9. 融資券籌碼 (散戶指標)
+        margin_diff = latest['Margin_Diff']
+        short_diff = latest['Short_Diff']
+        price_diff = latest['Close'] - latest['Prev_Close']
+        
+        desc_retail = f"本日融資增減: {int(margin_diff)}張, 融券增減: {int(short_diff)}張"
+        
+        if margin_diff < 0 and short_diff > 0:
+            analysis_list.append(["9. 籌碼理論 (散戶)", "🟢 看多", desc_retail + " (資減券增，醞釀軋空)"])
+            bull_count += 1
+        elif margin_diff > 0 and price_diff < 0:
+            analysis_list.append(["9. 籌碼理論 (散戶)", "🔴 看空", desc_retail + " (資增價跌，散戶接刀)"])
+            bear_count += 1
+        else:
+            analysis_list.append(["9. 籌碼理論 (散戶)", "⚪ 中立", desc_retail + " (散戶籌碼無明顯背離)"])
+
     else:
-        analysis_list.append(["8. 籌碼理論 (法人)", "⚪ 未知", "今日籌碼資料尚無或API異常"])
+        analysis_list.append(["8. 籌碼理論 (法人)", "⚪ 未知", "籌碼資料庫無回應"])
+        analysis_list.append(["9. 籌碼理論 (散戶)", "⚪ 未知", "籌碼資料庫無回應"])
 
     db3_df = pd.DataFrame(analysis_list, columns=["分析方法", "當前訊號", "狀態描述"])
     
-    # 專家矛盾引擎升級：加入籌碼判斷
+    # 專家矛盾引擎
     expert_comment = ""
     trend_is_up = (latest['SMA_5'] > latest['SMA_20'])
     trend_is_down = (latest['SMA_5'] < latest['SMA_20'])
     
-    # 籌碼與技術面的矛盾分析
     if has_chip:
         if trend_is_down and (trust_3d_sum > 500 or foreign_3d_sum > 2000):
-            expert_comment += "💡 **【專家視角：法人逢低偷接】** 目前技術均線呈現空頭，但發現「外資或投信連續買超」。這代表主力法人正在逢低承接，籌碼從散戶流向法人，隨時有醞釀大反彈的可能！不建議在此追空。\n\n"
+            expert_comment += "💡 **【專家視角：法人逢低偷接】** 技術均線偏空，但「外資或投信連續買超」。主力正在逢低承接，籌碼從散戶流向法人，隨時醞釀反彈，不建議追空。\n\n"
         elif trend_is_up and (trust_3d_sum < -500 or foreign_3d_sum < -2000):
-            expert_comment += "💡 **【專家視角：主力逢高出貨】** 目前技術面看似強勢，但「外資或投信卻在大量賣超」。請小心這是主力在拉高出貨的假突破，技術面指標即將反轉，建議多單嚴格設停損或減碼。\n\n"
+            expert_comment += "💡 **【專家視角：主力逢高出貨】** 技術面強勢，但「外資或投信大量賣超」。可能是拉高出貨假突破，技術面隨時反轉，多單嚴格設停損。\n\n"
+        elif trend_is_down and (latest['Margin_Diff'] > 0):
+            expert_comment += "💡 **【專家視角：籌碼凌亂警告】** 股價下跌但「融資(散戶)卻在進場買進」。籌碼流向散戶，典型的『弱者恆弱』格局，切勿隨意摸底。\n\n"
 
-    # 若無籌碼矛盾，執行常規判斷
     if expert_comment == "":
         if (bull_count > 0) and (bear_count > 0):
-            expert_comment += "💡 **【專家視角：盤勢震盪】** 指標方向分歧，處於「盤整區間」或「趨勢轉換期」。建議空手觀望。\n\n"
-        elif bull_count > 3:
-            expert_comment += "💡 **【專家視角：順勢做多】** 多方共識強烈，順勢操作勝率極高。\n\n"
-        elif bear_count > 3:
-            expert_comment += "💡 **【專家視角：順勢偏空】** 空方共識強烈，嚴格執行多單停損。\n\n"
+            expert_comment += "💡 **【專家視角：多空分歧】** 各項指標方向不一，盤勢進入震盪整理區間。建議以布林通道邊界操作，或空手觀望。\n\n"
+        elif bull_count > 4:
+            expert_comment += "💡 **【專家視角：強烈偏多】** 技術與籌碼面高度共識看多，順勢操作勝率高。\n\n"
+        elif bear_count > 4:
+            expert_comment += "💡 **【專家視角：強烈偏空】** 技術與籌碼面高度共識看空，風險極高，嚴格停損。\n\n"
 
     return db3_df, date, close_price, bull_count, bear_count, expert_comment
 
@@ -249,6 +302,9 @@ def plot_candlestick(db2):
                     name='K線')])
     fig.add_trace(go.Scatter(x=plot_data['Date'], y=plot_data['SMA_5'], mode='lines', name='5日均線', line=dict(color='blue', width=1)))
     fig.add_trace(go.Scatter(x=plot_data['Date'], y=plot_data['SMA_20'], mode='lines', name='20日均線', line=dict(color='orange', width=1.5)))
+    fig.add_trace(go.Scatter(x=plot_data['Date'], y=plot_data['BB_Up'], mode='lines', name='布林上軌', line=dict(color='rgba(255, 0, 0, 0.3)', width=1, dash='dot')))
+    fig.add_trace(go.Scatter(x=plot_data['Date'], y=plot_data['BB_Low'], mode='lines', name='布林下軌', line=dict(color='rgba(0, 255, 0, 0.3)', width=1, dash='dot')))
+    
     fig.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10), height=400)
     return fig
 
@@ -273,8 +329,9 @@ if update_button or stock_code:
         
         st.write("#### ⚖️ 專家矛盾分析與權重判讀")
         st.info(expert_comment)
+        st.write(f"*【基礎統計】看多指標：{bulls} 個 ｜ 看空指標：{bears} 個*")
                 
-        with st.expander("🗄️ 展開查看原始資料 (含法人籌碼) 與 技術指標"):
+        with st.expander("🗄️ 展開查看原始資料 (含籌碼數據) 與 技術指標"):
             st.dataframe(db2_ta_data.tail(5), use_container_width=True)
     else:
         st.error(f"❌ 找不到代號為「{stock_code}」的股票。")
