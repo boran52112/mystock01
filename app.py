@@ -234,3 +234,32 @@ if s_code:
         df_raw, sym, s_name, has_c = fetch_data(s_code)
         if df_raw is not None:
             db2 = generate_db2(df_raw)
+            db3_df, b_score, r_score, rpt_h, stg_h = generate_expert_diagnostic(db2, has_c)
+            
+            def fmt(v): return f"{v:.2f}".rstrip('0').rstrip('.') if v % 1 != 0 else f"{int(v)}"
+            curr_p = db2.iloc[-1]['Close']; diff_p = curr_p - db2.iloc[-2]['Close']
+            
+            st.subheader(f"📊 分析對象：{s_code} - {s_name}")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("最新股價", f"{fmt(curr_p)} TWD", f"{diff_p:.2f}")
+            col2.metric("多方加權分", f"{b_score} 分")
+            col3.metric("空方加權分", f"{r_score} 分")
+            
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_width=[0.3, 0.7])
+            fig.add_trace(go.Candlestick(x=db2['Date'], open=db2['Open'], high=db2['High'], low=db2['Low'], close=db2['Close'], name="K線"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=db2['Date'], y=db2['SMA_5'], line=dict(color='blue', width=1), name="5MA"), row=1, col=1)
+            fig.add_trace(go.Scatter(x=db2['Date'], y=db2['SMA_20'], line=dict(color='orange', width=1.5), name="20MA"), row=1, col=1)
+            colors = ['#EF5350' if c >= o else '#26A69A' for c, o in zip(db2['Close'], db2['Open'])]
+            fig.add_trace(go.Bar(x=db2['Date'], y=db2['Volume'], marker_color=colors, name="成交量"), row=2, col=1)
+            fig.update_layout(xaxis_rangeslider_visible=False, height=500, margin=dict(t=30, l=10, r=10, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.markdown("### 🧠 專家系統診斷與全維度對策 (DB3)")
+            cl, cr = st.columns([4, 6])
+            with cl:
+                st.dataframe(db3_df, hide_index=True, use_container_width=True)
+            with cr:
+                st.markdown(f'<div class="report-card">{rpt_h}</div>', unsafe_allow_html=True)
+                st.write("")
+                st.markdown(f'<div class="strategy-card">{stg_h}</div>', unsafe_allow_html=True)
+        else: st.error("查無資料。")
