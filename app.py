@@ -8,26 +8,23 @@ from FinMind.data import DataLoader
 from datetime import datetime, timedelta
 
 # --- 網頁配置 ---
-st.set_page_config(page_title="AI 專家全維度決策系統", layout="wide")
+st.set_page_config(page_title="AI 專家實事求是決策系統", layout="wide")
 
 st.markdown("""
     <style>
     .report-card { background-color: #ffffff; padding: 25px; border-radius: 15px; border-left: 8px solid #1f77b4; box-shadow: 0 4px 12px rgba(0,0,0,0.08); line-height: 1.8; }
     .strategy-card { background-color: #f8f9fa; padding: 25px; border-radius: 15px; border-left: 8px solid #d62728; border: 1px solid #eee; line-height: 1.8; }
-    .logic-tag { background-color: #e3f2fd; color: #0d47a1; padding: 2px 8px; border-radius: 4px; font-size: 0.85rem; font-weight: bold; border: 1px solid #bbdefb; margin-right: 5px; }
-    .buy-signal { color: #2e7d32; font-weight: bold; font-size: 1.2rem; }
-    .sell-signal { color: #d32f2f; font-weight: bold; font-size: 1.2rem; }
+    .logic-tag { background-color: #fce4ec; color: #c2185b; padding: 2px 8px; border-radius: 4px; font-size: 0.85rem; font-weight: bold; border: 1px solid #f8bbd0; margin-right: 5px; }
     .stMetric { background-color: #ffffff; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("📈 AI 專家級 9 大指標實事求是診斷系統")
+st.title("📈 AI 專家級 9 大指標實事求是分析系統 (V3.0)")
 
 # --- 1. 資料抓取 ---
 @st.cache_data(ttl=3600)
 def fetch_stock_full_data(code):
     df_p, actual_sym, s_name = None, None, f"股票 {code}"
-    # 抓中文名
     try:
         dl = DataLoader()
         info = dl.taiwan_stock_info()
@@ -50,7 +47,6 @@ def fetch_stock_full_data(code):
     
     if df_p is None: return None, None, None, False
     
-    # 抓籌碼
     try:
         start = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
         df_i = dl.taiwan_stock_institutional_investors(stock_id=code, start_date=start)
@@ -87,31 +83,30 @@ def calculate_db2(df):
     d['Margin_Diff'] = d['Margin_Bal'].diff() if 'Margin_Bal' in d.columns else 0
     return d.dropna()
 
-# --- 3. 實事求是專家決策系統 ---
+# --- 3. 實事求是決策系統 (核心修正) ---
 def generate_expert_report(db2, has_chip):
     latest, prev = db2.iloc[-1], db2.iloc[-2]
     bull_score, bear_score = 0, 0
     analysis_table = []
     
-    # 指標庫清單 (確保 9 個)
     # 1. 均線 (W3)
-    is_sma_long = latest['SMA_5'] > latest['SMA_20']
-    if is_sma_long: analysis_table.append(["1. 均線趨勢", "🟢 看多", "多頭排列 (W3)"]); bull_score += 3
-    else: analysis_table.append(["1. 均線趨勢", "🔴 看空", "趨勢偏弱 (W3)"]); bear_score += 3
+    is_sma_bull = latest['SMA_5'] > latest['SMA_20']
+    if is_sma_bull: analysis_table.append(["1. 均線趨勢", "🟢 看多", "多頭排列 (W3)"]); bull_score += 3
+    else: analysis_table.append(["1. 均線趨勢", "🔴 看空", "趨勢向下 (W3)"]); bear_score += 3
 
     # 2. RSI (W1)
     if latest['RSI'] > 75: analysis_table.append(["2. 動能 RSI", "🔴 看空", "超買區"]); bear_score += 1
     elif latest['RSI'] < 25: analysis_table.append(["2. 動能 RSI", "🟢 看多", "超賣區"]); bull_score += 1
-    else: analysis_table.append(["2. 動能 RSI", "⚪ 中立", "正常震盪"])
+    else: analysis_table.append(["2. 動能 RSI", "⚪ 中立", "震盪區間"])
 
     # 3. MACD (W1)
-    is_macd_long = latest['MACD_H'] > 0
-    if is_macd_long: analysis_table.append(["3. 波段 MACD", "🟢 看多", "動能增強"]); bull_score += 1
+    is_macd_bull = latest['MACD_H'] > 0
+    if is_macd_bull: analysis_table.append(["3. 波段 MACD", "🟢 看多", "動能增強"]); bull_score += 1
     else: analysis_table.append(["3. 波段 MACD", "🔴 看空", "波段向下"]); bear_score += 1
 
     # 4. 布林 (W1)
     if latest['Close'] > latest['BB_Up']: analysis_table.append(["4. 布林通道", "🟢 看多", "強勢表態"]); bull_score += 1
-    elif latest['Close'] < latest['BB_Low']: analysis_table.append(["4. 布林通道", "🔴 看空", "破位下殺"]); bear_score += 1
+    elif latest['Close'] < latest['BB_Low']: analysis_table.append(["4. 布林通道", "🔴 看空", "下殺破位"]); bear_score += 1
     else: analysis_table.append(["4. 布林通道", "⚪ 中立", "軌道內盤整"])
 
     # 5. KD (W1)
@@ -121,21 +116,21 @@ def generate_expert_report(db2, has_chip):
 
     # 6. K線 (W2)
     body = abs(latest['Close'] - latest['Open']); lower_s = min(latest['Close'], latest['Open']) - latest['Low']
-    is_shadow_long = lower_s > body * 1.5 and body > 0
-    if is_shadow_long: analysis_table.append(["6. K線型態", "🟢 看多", "影線支撐 (W2)"]); bull_score += 2
-    else: analysis_table.append(["6. K線型態", "⚪ 中立", "一般K線"])
+    is_shadow_bull = lower_s > body * 1.5 and body > 0
+    if is_shadow_bull: analysis_table.append(["6. K線型態", "🟢 看多", "影線支撐 (W2)"]); bull_score += 2
+    else: analysis_table.append(["6. K線型態", "⚪ 中立", "常態K線"])
 
     # 7. 缺口 (W2)
-    is_gap_up = latest['Low'] > prev['High']
-    if is_gap_up: analysis_table.append(["7. 缺口理論", "🟢 看多", "跳空強勢 (W2)"]); bull_score += 2
-    else: analysis_table.append(["7. 缺口理論", "⚪ 中立", "無缺口"])
+    is_gap_bull = latest['Low'] > prev['High']
+    if is_gap_bull: analysis_table.append(["7. 缺口理論", "🟢 看多", "向上跳空 (W2)"]); bull_score += 2
+    else: analysis_table.append(["7. 缺口理論", "⚪ 中立", "無跳空"])
 
     # 8. 法人 (W3)
     if has_chip:
         inst_net = latest['Foreign_Buy'] + latest['Trust_Buy']
         if inst_net > 500: analysis_table.append(["8. 法人籌碼", "🟢 看多", "法人大買 (W3)"]); bull_score += 3
         elif inst_net < -500: analysis_table.append(["8. 法人籌碼", "🔴 看空", "法人倒貨 (W3)"]); bear_score += 3
-        else: analysis_table.append(["8. 法人籌碼", "⚪ 中立", "動作不明"])
+        else: analysis_table.append(["8. 法人籌碼", "⚪ 中立", "無大動作"])
     else: analysis_table.append(["8. 法人籌碼", "⚪ 未知", "缺少資料"])
 
     # 9. 散戶 (W2)
@@ -147,41 +142,46 @@ def generate_expert_report(db2, has_chip):
         else: analysis_table.append(["9. 散戶籌碼", "⚪ 中立", "散戶穩定"])
     else: analysis_table.append(["9. 散戶籌碼", "⚪ 未知", "缺少資料"])
 
-    # --- DB3 核心矛盾解析 (不再空白，必須討論矛盾) ---
-    rpt_html = "<div class='report-title'>🔍 1. 核心矛盾與信度解析</div><ul>"
+    # --- DB3 核心矛盾解析 (不再出錯，實事求是) ---
+    score_diff = bull_score - bear_score
+    mood = "多方佔優勢" if score_diff > 0 else "空方佔優勢" if score_diff < 0 else "多空勢均力敵"
     
-    # 討論最大的分歧 (如果有紅有綠)
+    rpt_html = f"<div class='report-title'>🔍 1. 核心矛盾與信度解析</div><ul>"
+    rpt_html += f"<li><b>盤勢診斷：</b>目前的加權總分顯示市場由 <b style='color:{'green' if score_diff > 0 else 'red'}'>{mood}</b>。</li>"
+    
+    # 深度解析邏輯
     contradictions = []
-    if is_sma_long and not is_macd_long:
-        contradictions.append("<li><span class='logic-tag'>動能背離</span> 趨勢(均線)依然看多，但波段動能(MACD)已轉綠。<b>專家觀點：</b>這代表多頭趨勢不變，但進入了震盪或回檔期，並非反轉，操作上應『持股續抱，暫不追高』。</li>")
-    if not is_sma_long and is_shadow_long:
-        contradictions.append("<li><span class='logic-tag'>底部抵抗</span> 趨勢處於空頭，但K線出現長下影線。<b>專家觀點：</b>這代表低檔有人護盤，雖然不宜做多，但空單應在此止盈，不可追空。</li>")
-    if is_sma_long and is_gap_up:
-        contradictions.append("<li><span class='logic-tag'>多頭強勢同步</span> 均線與跳空缺口同步表態。<b>專家觀點：</b>這是極強的起漲訊號，技術面信度高達 90%。</li>")
+    if is_sma_bull and not is_macd_bull:
+        contradictions.append("<li><span class='logic-tag'>動能背離</span> 均線(趨勢)看多但 MACD(動能)看空。專家認為這是『強勢中的修正』，非反轉訊號，持股應防守而非出清。</li>")
+    elif not is_sma_bull and is_shadow_bull:
+        contradictions.append("<li><span class='logic-tag'>底部反彈</span> 趨勢看空但K線出現長下影支撐。專家提醒此處不宜加碼放空，因為下方買盤已開始承接。</li>")
+    elif not is_sma_bull and not is_macd_bull:
+        contradictions.append("<li><span class='logic-tag'>空頭一致性</span> 均線趨勢與波段動能同步向下。專家解析：這是典型的空頭結構，下跌具備高度信度，建議全面避險。</li>")
     
     if not contradictions:
-        rpt_html += f"<li>目前 9 大指標方向大致相符，總加權分顯示多方佔優勢。專家認為盤勢邏輯單一，信度極高。</li>"
+        rpt_html += f"<li>指標方向高度同步，信度極高。</li>"
     else:
         rpt_html += "".join(contradictions)
+    
+    if not has_chip:
+        rpt_html += "<li>⚠️ <b>注意：</b>目前缺乏法人籌碼數據，信度完全依賴技術型態。</li>"
     rpt_html += "</ul>"
 
-    # --- DB3 具體操作策略 (實事求是，給出明確方向) ---
+    # --- DB3 具體操作策略 ---
     stg_html = "<div class='report-title'>🎯 2. 具體操作策略與動作</div><ul>"
-    score_diff = bull_score - bear_score
-    
-    if score_diff >= 5:
-        stg_html += f"<li><span class='buy-signal'>強勢買入 (Buy)</span></li><li><b>原因：</b>多方加權分領先超過 5 分，且主指標(W3)皆在多方。</li><li><b>動作：</b>建議於 5MA ({latest['SMA_5']:.1f}) 附近進場，防守設在 20MA。</li>"
-    elif score_diff <= -5:
-        stg_html += f"<li><span class='sell-signal'>積極放空 (Short Sell)</span></li><li><b>原因：</b>空方勢力具有壓倒性權重。</li><li><b>動作：</b>建議現價建立空單，或出清所有現券持股。</li>"
+    if score_diff >= 4:
+        stg_html += f"<li><b style='color:green; font-size:1.1rem;'>✅ 建議動作：買入 / 持股續抱</b></li><li><b>原因：</b>多項核心指標(W3)與趨勢同步看多。</li>"
+    elif score_diff <= -4:
+        stg_html += f"<li><b style='color:red; font-size:1.1rem;'>🚨 建議動作：積極放空 / 全面清倉</b></li><li><b>原因：</b>趨勢與動能同步破壞，且空方分數具有顯著優勢。</li>"
     elif score_diff < 0:
-        stg_html += f"<li><b>消極避險 (Sell/Watch)</b></li><li><b>原因：</b>多空拉鋸，但空方微幅佔優。</li><li><b>動作：</b>建議賣出持股觀望，等待趨勢重新站上均線。</li>"
+        stg_html += f"<li><b>建議動作：消極避險 (賣出觀望)</b></li><li><b>原因：</b>空方微幅領先。雖不一定要放空，但應先收回資金避開下行風險。</li>"
     else:
-        stg_html += f"<li><b>觀望盤整 (Wait)</b></li><li><b>原因：</b>多空分數極其接近，市場無明確方向。</li><li><b>動作：</b>建議空手等待法人大動作表態。</li>"
+        stg_html += f"<li><b>建議動作：觀望 (Hold)</b></li><li><b>原因：</b>多空拉鋸中。</li>"
     stg_html += "</ul>"
 
-    return pd.DataFrame(analysis_table, columns=["維度", "訊號", "解析"]), bull_score, bear_score, rpt_html, stg_html
+    return pd.DataFrame(analysis_table, columns=["維度", "訊號", "專家解析"]), bull_score, bear_score, rpt_html, stg_html
 
-# --- 繪圖 ---
+# --- 繪圖功能 ---
 def plot_chart(df):
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_width=[0.3, 0.7])
     fig.add_trace(go.Candlestick(x=df['Date'], open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="K線"), row=1, col=1)
@@ -192,24 +192,20 @@ def plot_chart(df):
     fig.update_layout(xaxis_rangeslider_visible=False, height=500, margin=dict(t=30, l=10, r=10, b=10))
     return fig
 
-# --- 主 UI ---
+# --- 主程式執行 ---
 code = st.text_input("📈 請輸入台股代號", "2330").strip()
 if code:
-    with st.spinner("AI 專家正在執行深度診斷..."):
+    with st.spinner("AI 專家執行全維度診斷中..."):
         df_raw, sym, s_name, has_c = fetch_stock_full_data(code)
         if df_raw is not None:
             db2 = calculate_db2(df_raw)
             db3_df, b_score, r_score, rpt_h, stg_h = generate_expert_report(db2, has_c)
             
-            # 格式化顯示
-            curr_p = db2.iloc[-1]['Close']; prev_p = db2.iloc[-2]['Close']
-            diff = curr_p - prev_p
-            
-            st.subheader(f"📊 分析對象：{code} - {s_name}")
+            st.subheader(f"📊 分析標的：{code} - {s_name}")
             col1, col2, col3 = st.columns(3)
-            col1.metric("當前股價", f"{curr_p:.2f} TWD", f"{diff:.2f}")
-            col2.metric("多方加權分", f"{b_score} 分")
-            col3.metric("空方加權分", f"{r_score} 分")
+            col1.metric("當前股價", f"{db2.iloc[-1]['Close']:.2f} TWD")
+            col2.metric("多方加權總分", f"{b_score} 分")
+            col3.metric("空方加權總分", f"{r_score} 分")
             
             st.plotly_chart(plot_chart(db2.tail(100)), use_container_width=True)
             
@@ -221,3 +217,4 @@ if code:
                 st.markdown(f'<div class="report-card">{rpt_h}</div>', unsafe_allow_html=True)
                 st.write("")
                 st.markdown(f'<div class="strategy-card">{stg_h}</div>', unsafe_allow_html=True)
+        else: st.error("查無資料。")
