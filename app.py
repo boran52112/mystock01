@@ -8,26 +8,24 @@ from FinMind.data import DataLoader
 from datetime import datetime, timedelta
 
 # --- 網頁配置 ---
-st.set_page_config(page_title="AI 專家大腦 - 9 大指標深度分析", layout="wide")
+st.set_page_config(page_title="AI 專家全方位診斷系統", layout="wide")
 
-# 專業 UI 樣式表
 st.markdown("""
     <style>
-    .report-title { font-size: 1.25rem; font-weight: bold; color: #1f77b4; margin-bottom: 12px; border-bottom: 2px solid #e1e4e8; padding-bottom: 8px; display: flex; align-items: center; }
+    .report-title { font-size: 1.25rem; font-weight: bold; color: #1f77b4; margin-bottom: 12px; border-bottom: 2px solid #e1e4e8; padding-bottom: 8px; }
     .report-card { background-color: #ffffff; padding: 25px; border-radius: 15px; border-left: 8px solid #1f77b4; box-shadow: 0 4px 12px rgba(0,0,0,0.08); min-height: 280px; line-height: 1.7; }
     .strategy-card { background-color: #fcfcfc; padding: 25px; border-radius: 15px; border-left: 8px solid #d62728; box-shadow: 0 4px 12px rgba(0,0,0,0.08); min-height: 200px; line-height: 1.7; border: 1px solid #eee; }
-    .logic-tag { background-color: #e1f5fe; color: #01579b; padding: 2px 8px; border-radius: 4px; font-size: 0.85rem; font-weight: bold; margin-right: 5px; }
-    .action-high { color: #d62728; font-weight: bold; text-decoration: underline; }
-    .action-low { color: #2ca02c; font-weight: bold; }
+    .logic-tag { background-color: #fff3e0; color: #e65100; padding: 2px 8px; border-radius: 4px; font-size: 0.85rem; font-weight: bold; margin-right: 5px; border: 1px solid #ffe0b2; }
+    .action-bold { color: #d62728; font-weight: bold; font-size: 1.1rem; }
     .stMetric { background-color: #ffffff; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
     ul { padding-left: 1.2rem; }
-    li { margin-bottom: 10px; }
+    li { margin-bottom: 12px; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🧠 AI 專家大腦：全維度指標決策系統")
+st.title("📈 AI 專家級 9 大指標診斷與操作系統")
 
-# --- 資料抓取模組 (DB1) ---
+# --- 資料抓取輔助 ---
 @st.cache_data(ttl=86400)
 def get_stock_chinese_name(code):
     try:
@@ -78,7 +76,7 @@ def fetch_complete_data(code):
         return df_price, actual_sym, final_name, True
     except: return df_price, actual_sym, final_name, False
 
-# --- 技術指標計算 (DB2) ---
+# --- 技術指標計算 ---
 def generate_db2(df):
     db2 = df.copy()
     db2['SMA_5'] = db2['Close'].rolling(5).mean()
@@ -99,143 +97,115 @@ def generate_db2(df):
         db2['Short_Diff'] = db2['Short_Bal'].diff()
     return db2.dropna()
 
-# --- 核心專家分析引擎 (DB3) ---
-def generate_expert_logic_db3(db2, has_chip):
+# --- 深度專家診斷引擎 ---
+def generate_expert_diagnostic_db3(db2, has_chip):
     latest, prev = db2.iloc[-1], db2.iloc[-2]
     bull_score, bear_score = 0, 0
     analysis_table = []
     
-    # 指標定義與權重分配 (Weight System)
-    # 權重 3: 均線, 法人 / 權重 2: K線, 缺口, 散戶背離 / 權重 1: RSI, MACD, KD, 布林
-    
-    # 1. 均線 (W3)
-    if latest['SMA_5'] > latest['SMA_20']:
+    # 權重分配邏輯
+    # 1. 趨勢 (W3)
+    is_trend_up = latest['SMA_5'] > latest['SMA_20']
+    if is_trend_up:
         analysis_table.append(["均線趨勢", "🟢 看多", "多頭排列 (W3)"]); bull_score += 3
     else:
         analysis_table.append(["均線趨勢", "🔴 看空", "空頭死叉 (W3)"]); bear_score += 3
 
-    # 2. 法人 (W3)
+    # 2. 籌碼 (W3)
+    inst_net = 0
     if has_chip:
         inst_net = latest['Foreign_Buy'] + latest['Trust_Buy']
-        if inst_net > 800:
-            analysis_table.append(["法人籌碼", "🟢 看多", "法人掃貨 (W3)"]); bull_score += 3
-        elif inst_net < -800:
-            analysis_table.append(["法人籌碼", "🔴 看空", "法人倒貨 (W3)"]); bear_score += 3
+        if inst_net > 500:
+            analysis_table.append(["法人籌碼", "🟢 看多", "法人積極買超 (W3)"]); bull_score += 3
+        elif inst_net < -500:
+            analysis_table.append(["法人籌碼", "🔴 看空", "法人積極賣超 (W3)"]); bear_score += 3
         else:
             analysis_table.append(["法人籌碼", "⚪ 中立", "法人觀望"])
 
-    # 3. 散戶背離 (W2)
-    if has_chip:
-        if latest['Margin_Diff'] > 500 and latest['Close'] < prev['Close']:
-            analysis_table.append(["散戶籌碼", "🔴 看空", "資增價跌背離 (W2)"]); bear_score += 2
-        elif latest['Margin_Diff'] < -500 and latest['Close'] > prev['Close']:
-            analysis_table.append(["散戶籌碼", "🟢 看多", "資減價揚穩健 (W2)"]); bull_score += 2
-        else:
-            analysis_table.append(["散戶籌碼", "⚪ 中立", "籌碼穩定"])
-
-    # 4. K線型態 (W2)
+    # 3. K線 (W2)
     body = abs(latest['Close'] - latest['Open']); lower_s = min(latest['Close'], latest['Open']) - latest['Low']
-    if lower_s > body * 2:
-        analysis_table.append(["K線型態", "🟢 看多", "長下影支撐 (W2)"]); bull_score += 2
+    is_shadow_support = lower_s > body * 1.5 and body > 0
+    if is_shadow_support:
+        analysis_table.append(["K線型態", "🟢 看多", "下影線護盤 (W2)"]); bull_score += 2
     else:
-        analysis_table.append(["K線型態", "⚪ 中立", "無特殊型態"])
+        analysis_table.append(["K線型態", "⚪ 中立", "常規型態"])
 
-    # 5. 缺口 (W2)
-    if latest['Low'] > prev['High']:
-        analysis_table.append(["跳空缺口", "🟢 看多", "向上跳空表態 (W2)"]); bull_score += 2
-    elif latest['High'] < prev['Low']:
-        analysis_table.append(["跳空缺口", "🔴 看空", "向下跳空衰竭 (W2)"]); bear_score += 2
+    # 4. MACD 動能 (W1)
+    is_macd_up = latest['MACD_H'] > 0
+    if is_macd_up:
+        analysis_table.append(["波段MACD", "🟢 看多", "動能轉強"]); bull_score += 1
     else:
-        analysis_table.append(["跳空缺口", "⚪ 中立", "無缺口"])
+        analysis_table.append(["波段MACD", "🔴 看空", "動能消退"]); bear_score += 1
 
-    # 6. RSI (W1)
-    if latest['RSI'] > 75: bear_score += 1; analysis_table.append(["動能RSI", "🔴 看空", "高檔超買"])
-    elif latest['RSI'] < 25: bull_score += 1; analysis_table.append(["動能RSI", "🟢 看多", "低階超賣"])
-    else: analysis_table.append(["動能RSI", "⚪ 中立", "正常震盪"])
+    # 5-9 其他指標 (W1) - RSI, KD, 布林, 缺口, 散戶
+    if latest['RSI'] < 30: bull_score += 1; analysis_table.append(["動能RSI", "🟢 看多", "超賣"])
+    elif latest['RSI'] > 70: bear_score += 1; analysis_table.append(["動能RSI", "🔴 看空", "超買"])
+    else: analysis_table.append(["動能RSI", "⚪ 中立", "震盪區"])
 
-    # 7. MACD (W1)
-    if latest['MACD_H'] > 0: bull_score += 1; analysis_table.append(["波段MACD", "🟢 看多", "動能增強"])
-    else: bear_score += 1; analysis_table.append(["波段MACD", "🔴 看空", "動能消退"])
-
-    # 8. KD (W1)
-    if latest['K'] > 80: bear_score += 1; analysis_table.append(["短線KD", "🔴 看空", "高檔區"])
-    elif latest['K'] < 20: bull_score += 1; analysis_table.append(["短線KD", "🟢 看多", "低檔區"])
-    else: analysis_table.append(["短線KD", "⚪ 中立", "常規區"])
-
-    # 9. 布林 (W1)
-    if latest['Close'] > latest['BB_Up']: bull_score += 1; analysis_table.append(["布林通道", "🟢 看多", "強勢過熱"])
-    elif latest['Close'] < latest['BB_Low']: bear_score += 1; analysis_table.append(["布林通道", "🔴 看空", "弱勢破底"])
-    else: analysis_table.append(["布林通道", "⚪ 中立", "軌道內"])
-
-    # --- 矛盾解析與診斷 (The Logic Brain) ---
+    # --- 專家深度診斷報告 (矛盾分析) ---
     rpt_html = "<div class='report-title'>🔍 核心矛盾與信度解析</div>"
-    conflicts = []
-    
-    # 矛盾A: 趨勢強但指標弱 (鈍化)
-    if latest['SMA_5'] > latest['SMA_20'] and (latest['RSI'] > 75 or latest['K'] > 80):
-        conflicts.append("<li><span class='logic-tag'>趨勢鈍化</span> 均線強多但震盪指標超買。<b>原因：</b>強勢股常見的高檔鈍化現象。<b>解析：</b>此時 RSI/KD 的看空訊號權重失效，應忽略該雜訊，以趨勢為準。</li>")
-    
-    # 矛盾B: 價漲籌碼空 (多頭陷阱)
-    if latest['Close'] > prev['Close'] and has_chip and inst_net < -1000:
-        conflicts.append("<li><span class='logic-tag'>多頭陷阱</span> 股價雖漲但法人大幅撤退。<b>原因：</b>這屬於「拉高出貨」的經典背離。<b>解析：</b>此上漲信度極低，極大機率是假突破，切勿追高。</li>")
-    
-    # 矛盾C: 價跌籌碼多 (底部護盤)
-    if latest['Close'] < prev['Close'] and has_chip and inst_net > 1000:
-        conflicts.append("<li><span class='logic-tag'>底部吸籌</span> 股價修正但法人逆勢大買。<b>原因：</b>主力趁亂進場護盤或分批建倉。<b>解析：</b>短線雖然看空，但長線支撐極強，不宜在此殺低。</li>")
+    insights = []
 
-    if not conflicts:
-        rpt_html += "<div><b>指標一致性：</b>目前技術面與籌碼面方向大致相符，無顯著矛盾，信度極高。</div>"
-    else:
-        rpt_html += "<ul>" + "".join(conflicts) + "</ul>"
+    # 情況 1: 趨勢與型態的衝突 (您圖片中的狀況：均線空、但影線多)
+    if not is_trend_up and is_shadow_support:
+        insights.append(f"<li><span class='logic-tag'>跌勢止穩</span> 雖然 <b style='color:red'>均線死叉</b> 顯示趨勢仍偏空，但今日出現 <b style='color:green'>長下影線</b>。這代表低檔買盤轉強，專家認為空方力道已受阻，此時不宜在低位加碼放空，應觀察是否能站回 5MA。</li>")
+    
+    # 情況 2: 趨勢與籌碼背離 (多頭陷阱)
+    if is_trend_up and has_chip and inst_net < -1000:
+        insights.append(f"<li><span class='logic-tag'>籌碼警告</span> 股價雖在均線上漲，但法人大幅賣超。這屬於「拉高出貨」背離，技術面的看多訊號信度降至 40%，切勿盲目追價。</li>")
+    
+    # 情況 3: 動能消退但趨勢仍存
+    if is_trend_up and not is_macd_up:
+        insights.append(f"<li><span class='logic-tag'>動能背離</span> 趨勢雖多，但 MACD 紅柱縮減。專家判定這是「漲勢衰竭」的徵兆，雖不至於放空，但應考慮分批賣出獲利。</li>")
 
-    # --- 操作策略與強度分級 (Intensity Matrix) ---
-    stg_html = "<div class='report-title'>🎯 操作策略與積極度分級</div>"
+    # 如果沒有特定大矛盾，也要給出具體的「多空勢力分析」
+    if not insights:
+        if bull_score > bear_score:
+            insights.append(f"<li><b>強勢同步：</b>目前趨勢與動能方向一致，多方佔據主導地位。技術面信度高，適合順勢而為。</li>")
+        else:
+            insights.append(f"<li><b>弱勢同步：</b>目前指標集體偏空，無明顯反轉跡象。技術面信度高，操作應避開或減碼。</li>")
+
+    rpt_html += "<ul>" + "".join(insights) + "</ul>"
+
+    # --- 操作積極度矩陣 (賣出 vs 放空) ---
+    stg_html = "<div class='report-title'>🎯 具體操作策略與積極度</div>"
     diff = bull_score - bear_score
     
-    # 持股者建議
-    stg_html += "<b>【針對現有持股者】</b><ul>"
-    if diff >= 5:
-        stg_html += "<li><b>建議動作：</b><span class='action-low'>持股續抱 / 甚至加碼</span></li><li><b>強度理由：</b>趨勢與籌碼具備雙重優勢，目前無須預設高點，直到破 5MA 再離場。</li>"
-    elif diff <= -5:
-        stg_html += "<li><b>建議動作：</b><span class='action-high'>立即清倉撤退</span></li><li><b>強度理由：</b>趨勢結構已破壞且法人棄守。這不是修正，而是反轉。</li>"
-    else:
-        stg_html += "<li><b>建議動作：</b>分批減碼，提高現金水位</li><li><b>強度理由：</b>指標出現分歧，市場動能不足，應先回收本金觀望。</li>"
-    stg_html += "</ul>"
-
-    # 空手者建議 (積極度區分)
-    stg_html += "<b>【針對空手進場者】</b><ul>"
-    if diff >= 7:
-        stg_html += "<li><b>建議動作：</b>積極進場 (分批建立多單)</li><li><b>理由：</b>高分信度，勝率較大。</li>"
-    elif diff <= -7:
-        stg_html += "<li><b>建議動作：</b><span class='action-high'>積極融券放空 ★★★</span></li><li><b>強度理由：</b>不僅是看空，這屬於「崩潰型」訊號。融資若開始停損將引發斷頭潮，下殺動能充足，是高獲利放空契機。</li>"
+    # 判定放空強度
+    is_shortable = (bear_score >= 6) and (latest['Close'] < latest['SMA_5'])
+    
+    stg_html += "<ul>"
+    if bull_score >= 7:
+        stg_html += f"<li><b class='action-bold'>積極買進 (Buy Aggressive)</b>：趨勢、籌碼與型態皆站在多方。建議以 5MA ({latest['SMA_5']:.1f}) 為基準，分批建倉。</li>"
+    elif bear_score >= 7 and is_shortable:
+        stg_html += f"<li><b class='action-bold'>積極放空 (Short Sell)</b>：這不僅是賣出現券，更是反向進攻時機。<b>原因：</b>趨勢結構性走壞且無護盤力道。建議以融券或借券賣出參與下殺波段。</li>"
     elif diff < 0:
-        stg_html += "<li><b>建議動作：</b>消極放空或觀望</li><li><b>強度理由：</b>雖看空但動能不足，放空風險報酬比不佳，僅建議套現觀望。</li>"
+        stg_html += f"<li><b style='color:#e65100; font-weight:bold;'>消極賣出 (Passive Sell)</b>：目前屬於轉弱但尚未崩盤。建議「獲利了結」或「減碼」，提高現金比例。不建議在此放空，因為下殺動能尚未噴發。</li>"
     else:
-        stg_html += "<li><b>建議動作：</b>耐心觀望</li><li><b>理由：</b>等待下一個權重指標（如法人轉買）表態。</li>"
+        stg_html += f"<li><b>中立觀望</b>：目前多空僵持。建議等待指標出現連續性的法人買/賣超再行動作。</li>"
     stg_html += "</ul>"
 
     return pd.DataFrame(analysis_table, columns=["維度", "訊號", "解析"]), bull_score, bear_score, rpt_html, stg_html
 
-# --- UI 呈現 ---
-s_code = st.text_input("📈 請輸入台股代號 (如 2330, 5490, 8069)", "2330").strip()
+# --- UI 顯示 ---
+s_code = st.text_input("📈 請輸入台股代號", "2330").strip()
 if s_code:
-    with st.spinner("AI 專家大腦運算中..."):
+    with st.spinner("專家大腦思考中..."):
         df_raw, sym, s_name, has_c = fetch_complete_data(s_code)
         if df_raw is not None:
             db2 = generate_db2(df_raw)
-            db3_df, bulls_s, bears_s, rpt_h, stg_h = generate_expert_logic_db3(db2, has_c)
+            db3_df, bulls_s, bears_s, rpt_h, stg_h = generate_expert_diagnostic_db3(db2, has_c)
             
-            # 格式化
             def fmt(v): return f"{v:.2f}".rstrip('0').rstrip('.') if v % 1 != 0 else f"{int(v)}"
             curr_p = db2.iloc[-1]['Close']; diff_p = curr_p - db2.iloc[-2]['Close']
             
             st.subheader(f"📊 分析標的：{s_code} - {s_name}")
             col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("最新收盤價", f"{fmt(curr_p)} TWD", f"{diff_p:.2f}")
-            col_m2.metric("多方加權總分", f"{bulls_s} 分")
-            col_m3.metric("空方加權總分", f"{bears_s} 分")
+            col_m1.metric("當前股價", f"{fmt(curr_p)} TWD", f"{diff_p:.2f}")
+            col_m2.metric("多方加權分", f"{bulls_s}")
+            col_m3.metric("空方加權分", f"{bears_s}")
             
-            # 圖表
+            # K線圖
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_width=[0.3, 0.7])
             fig.add_trace(go.Candlestick(x=db2['Date'], open=db2['Open'], high=db2['High'], low=db2['Low'], close=db2['Close'], name="K線"), row=1, col=1)
             fig.add_trace(go.Scatter(x=db2['Date'], y=db2['SMA_5'], line=dict(color='blue', width=1), name="5MA"), row=1, col=1)
@@ -253,5 +223,4 @@ if s_code:
                 st.markdown(f'<div class="report-card">{rpt_h}</div>', unsafe_allow_html=True)
                 st.write("")
                 st.markdown(f'<div class="strategy-card">{stg_h}</div>', unsafe_allow_html=True)
-        else:
-            st.error("查無資料，請確認代號是否正確。")
+        else: st.error("查無資料。")
