@@ -101,51 +101,24 @@ def generate_db2(df):
     d['Margin_Diff'] = d['Margin_Bal'].diff() if 'Margin_Bal' in d.columns else 0
     return d.dropna()
 
-# --- 呼叫 Google Gemini API 產生報告 (最終正式版) ---
+# --- 呼叫 Google Gemini API 產生報告 (診斷專用版) ---
 def call_ai_expert(indicator_data, price_data, key):
     genai.configure(api_key=key)
-    # 確保使用最新且穩定的 gemini-pro 模型
-    model = genai.GenerativeModel('gemini-pro')
-    
-    prompt = f"""
-你是一位擁有 20 年實戰經驗的台股重量級操盤手，同時也是一位極具耐心的財經導師。你的風格是客觀、數據導向，且擅長將複雜的市場現象轉化為清晰易懂的邏輯。
-
-現在，請你針對以下這檔股票的 9 項技術與籌碼指標，進行「教科書等級」的深度交叉辯論與實戰指導。請盡量【使用列點式呈現】，讓文章具備高度的易讀性。
-
-### 📊 傳入的指標數據 (共9項)：
-{indicator_data}
-
-### 💰 傳入的關鍵價位數據：
-{price_data}
-
----
-### 📝 你的輸出任務必須嚴格包含以下四個段落：
-
-#### 第一部分：盤勢全覽與指標教學解析
-- 請以「導師」的口吻，挑選出目前最關鍵的 2~3 個重點指標，向使用者解釋「為什麼這個訊號在此刻很重要？」以及它背後的意義。
-
-#### 第二部分：共識與矛盾的深度辯論 (核心價值)
-- **【共識強化】：** 盤點哪些指標方向一致（如互相支持）。深入說明這些力量結合在一起時，反映了什麼樣的市場心理或主力意圖？
-- **【矛盾解剖】：** 盤點哪些指標產生了衝突。請發揮專業，解釋為什麼會出現這種矛盾？這是散戶被誘多的【騙線出貨】，還是上漲過程的【技術性洗盤】？請給出你的研判。
-
-#### 第三部分：後勢推演預判
-- 基於上述辯論，推演接下來 3~5 天內該股票最有可能發展的「高機率劇本」。
-- 提醒潛在的風險或需要關注的變數。
-
-#### 第四部分：實戰操作指引與價位規劃
-- 將前面的分析觀點進行整合，給出明確、有紀律的交易建議。
-- **必須將傳入的【關鍵價位數據】(如 5MA、20MA、今高等) 帶入建議中，作為具體的防守或進攻點。**
-- 請嚴格分為以下兩種情境，以列點方式撰寫：
-  1. 💼 **【已經持有部位者】：** 該續抱、加碼、還是減碼停損？防守價位設在哪裡？為什麼？
-  2. 👁️ **【尚未持有部位者】：** 該空手觀望、尋找買點、還是反手放空？進場與停損價位設在哪裡？為什麼？
-
-請以繁體中文撰寫，排版層次分明、適當使用 Emoji，語氣必須充滿說服力且邏輯嚴密。
-"""
     try:
-        response = model.generate_content(prompt)
-        return response.text
+        # 強制向 Google 查詢這把鑰匙目前所有可用的模型清單
+        available_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+        
+        if not available_models:
+            return "❌ 診斷結果：金鑰有效，但 Google 尚未開放任何 AI 模型給您的帳號。這可能是新帳號審核中，或地區限制。"
+        else:
+            models_str = "<br>".join(available_models)
+            return f"✅ 診斷成功！這台伺服器與這把鑰匙，目前【真正支援】的模型如下：<br><br><b style='color:blue;'>{models_str}</b><br><br>👉 請截圖這個畫面給我，我們直接從名單裡挑一個貼回去！"
+            
     except Exception as e:
-        return f"❌ AI 診斷產生錯誤：{str(e)}。請確認您的 API Key 是否正確或網路是否連線。"
+        return f"❌ 網路底層連線錯誤，請截圖給我看這段文字：<br>{str(e)}"
 
 # --- 核心引擎：資料準備與介面呈現 ---
 def generate_expert_debate_db3(db2, has_chip):
@@ -228,7 +201,7 @@ if s_code:
     if not api_key:
         st.info("👈 請先在左側邊欄輸入您的 Gemini API Key，才可啟動 AI 分析。")
     else:
-        with st.spinner("🕵️‍♂️ AI 大師正在交叉比對 9 大指標，撰寫深度報告中... (約需 5~8 秒)"):
+        with st.spinner("🕵️‍♂️ 正在啟動系統照妖鏡，強制查詢可用模型清單中..."):
             df_raw, sym, s_name, has_c = fetch_complete_data(s_code)
             
             if df_raw is not None and not df_raw.empty:
@@ -236,7 +209,7 @@ if s_code:
                 if not db2.empty:
                     db3_df, ind_txt, prc_txt = generate_expert_debate_db3(db2, has_c)
                     
-                    # 呼叫 AI 寫報告
+                    # 執行照妖鏡診斷
                     ai_report = call_ai_expert(ind_txt, prc_txt, api_key)
                     
                     curr_p = db2.iloc[-1]['Close']
@@ -261,7 +234,7 @@ if s_code:
                         st.markdown("#### 🧭 9 大指標當前狀態")
                         st.dataframe(db3_df, hide_index=True, use_container_width=True)
                     with cr:
-                        st.markdown("#### 🧠 AI 專家深度辯論與策略指導")
+                        st.markdown("#### 🔍 系統照妖鏡診斷結果")
                         st.markdown(f'<div class="report-card">{ai_report}</div>', unsafe_allow_html=True)
                 else:
                     st.error("計算技術指標時資料不足，請確認該股票上市時間是否夠長。")
