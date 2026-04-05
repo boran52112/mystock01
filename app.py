@@ -104,8 +104,8 @@ def generate_db2(df):
 # --- 呼叫 Google Gemini API 產生報告 (最終正式版) ---
 def call_ai_expert(indicator_data, price_data, key):
     genai.configure(api_key=key)
-    # 確保使用最新且穩定的 1.5 flash 模型
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # 確保使用最新且穩定的 gemini-pro 模型
+    model = genai.GenerativeModel('gemini-pro')
     
     prompt = f"""
 你是一位擁有 20 年實戰經驗的台股重量級操盤手，同時也是一位極具耐心的財經導師。你的風格是客觀、數據導向，且擅長將複雜的市場現象轉化為清晰易懂的邏輯。
