@@ -105,7 +105,7 @@ def generate_db2(df):
 def call_ai_expert(indicator_data, price_data, key):
     genai.configure(api_key=key)
     # 使用最新的 gemini-1.5-flash 模型 (速度快、免費額度高)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-3.0-flash-preview')
     
     # 這是我們剛剛討論好的終極 Prompt！
     prompt = f"""
