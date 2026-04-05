@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from FinMind.data import DataLoader
 from datetime import datetime, timedelta
-import google.generativeai as genai  # 新增：匯入 Google AI 套件
+import google.generativeai as genai
 
 # --- 網頁配置 ---
 st.set_page_config(page_title="AI 專家偵探決策系統", layout="wide")
@@ -23,11 +23,11 @@ st.sidebar.title("🔑 AI 大腦設定")
 st.sidebar.markdown("請輸入您的 Google Gemini API Key 以啟動專家系統。")
 api_key = st.sidebar.text_input("Gemini API Key", type="password")
 if not api_key:
-    st.sidebar.warning("⚠️ 請先輸入 API Key 才可產生診斷報告！[點此免費申請](https://makersuite.google.com/app/apikey)")
+    st.sidebar.warning("⚠️ 請先輸入 API Key 才可產生診斷報告！[點此免費申請](https://aistudio.google.com/app/apikey)")
 
 st.title("🕵️‍♂️ AI 專家偵探：9 大指標全方位辯論系統")
 
-# --- 資料抓取與預處理 (維持原樣) ---
+# --- 資料抓取與預處理 ---
 @st.cache_data(ttl=86400)
 def get_stock_name(code):
     try:
@@ -101,13 +101,12 @@ def generate_db2(df):
     d['Margin_Diff'] = d['Margin_Bal'].diff() if 'Margin_Bal' in d.columns else 0
     return d.dropna()
 
-# --- 新增：呼叫 Google Gemini API 產生報告 ---
+# --- 呼叫 Google Gemini API 產生報告 (最終正式版) ---
 def call_ai_expert(indicator_data, price_data, key):
     genai.configure(api_key=key)
-    # 使用最新的 gemini-1.0-pro 模型 (速度快、免費額度高)
-    model = genai.GenerativeModel('gemini-1.0-pro')
+    # 確保使用最新且穩定的 1.5 flash 模型
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
-    # 這是我們剛剛討論好的終極 Prompt！
     prompt = f"""
 你是一位擁有 20 年實戰經驗的台股重量級操盤手，同時也是一位極具耐心的財經導師。你的風格是客觀、數據導向，且擅長將複雜的市場現象轉化為清晰易懂的邏輯。
 
@@ -212,7 +211,6 @@ def generate_expert_debate_db3(db2, has_chip):
         table_data.append(["9. 散戶 (籌碼)", "⚪ 未知", "無資料"])
         indicator_text += "- 散戶籌碼：未知 (無資料)\n"
 
-    # --- 整理價位資訊送給 AI ---
     price_text = f"""
 - 最新收盤價：{latest['Close']:.2f}
 - 今日最高價：{latest['High']:.2f}
@@ -236,13 +234,11 @@ if s_code:
             if df_raw is not None and not df_raw.empty:
                 db2 = generate_db2(df_raw)
                 if not db2.empty:
-                    # 1. 取得指標狀態與字串
                     db3_df, ind_txt, prc_txt = generate_expert_debate_db3(db2, has_c)
                     
-                    # 2. 呼叫 AI API 產生報告
+                    # 呼叫 AI 寫報告
                     ai_report = call_ai_expert(ind_txt, prc_txt, api_key)
                     
-                    # 3. 畫面上方：基本資訊與圖表
                     curr_p = db2.iloc[-1]['Close']
                     diff_p = curr_p - db2.iloc[-2]['Close']
                     
@@ -260,7 +256,6 @@ if s_code:
                     fig.update_layout(xaxis_rangeslider_visible=False, height=450, margin=dict(t=30, l=10, r=10, b=10))
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    # 4. 畫面下方：左側為指標表，右側為 AI 報告
                     cl, cr = st.columns([30, 70])
                     with cl:
                         st.markdown("#### 🧭 9 大指標當前狀態")
