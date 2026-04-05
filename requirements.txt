@@ -3,5 +3,4 @@ yfinance
 pandas
 plotly
 FinMind
-tqdm
-requests
+google-generativeai
