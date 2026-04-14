@@ -4,5 +4,5 @@ pandas
 plotly
 FinMind
 google-generativeai>=0.7.0
-pandas-ta
+pandas_ta
 requests
