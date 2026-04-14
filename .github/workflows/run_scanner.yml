@@ -19,7 +19,7 @@ jobs:
     - name: 2. 安裝 Python 環境
       uses: actions/setup-python@v4
       with:
-        python-version: '3.10'
+        python-version: '3.12'
 
     - name: 3. 安裝工具清單 (requirements.txt)
       run: |
