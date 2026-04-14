@@ -28,7 +28,7 @@ jobs:
 
     - name: 4. 執行掃描程式 (scanner.py)
       env:
-        FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }} # 從保險箱拿 Key
+        FINMIND_API_TOKEN: ${{ secrets.FINMIND_TOKEN }} # 從保險箱拿 Key
       run: python scanner.py
 
     - name: 5. 把產出的 CSV 存回 GitHub
