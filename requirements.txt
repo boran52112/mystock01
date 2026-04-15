@@ -1,8 +1,7 @@
 streamlit
-yfinance
 pandas
-plotly
+yfinance
+pandas-ta
 FinMind
-google-genai
-pandas_ta
 requests
+google-genai
