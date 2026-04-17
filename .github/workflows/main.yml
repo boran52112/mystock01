@@ -1,0 +1,33 @@
+name: Taiwan Stock AI Daily Scanner
+
+on:
+  schedule:
+    # 這是國際標準時間 (UTC)，07:30 UTC = 台灣時間 15:30
+    # 每週一至五執行
+    - cron: '30 7 * * 1-5'
+  workflow_dispatch:
+    # 讓你可以手動按按鈕啟動測試
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 1. 下載專案程式碼
+      uses: actions/checkout@v3
+
+    - name: 2. 設定 Python 環境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: 3. 安裝必要外掛
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests pandas gspread google-auth pytz
+
+    - name: 4. 啟動掃描程式
+      env:
+        # 將保險箱的金鑰交給程式使用
+        GCP_SERVICE_ACCOUNT_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+      run: python scanner.py
