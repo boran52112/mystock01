@@ -4,109 +4,101 @@ import requests
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime
+from datetime import datetime, timedelta
+import pytz
 
 # ==========================================
 # 1. 配置與初始化
 # ==========================================
-# Google 試算表 ID
 SHEET_ID = "1UH-fwxENhGUDmQjTQJq72g1DzsxML_CPIJGg39cWAgM"
-
-# 設定 Google Sheets API 權限範圍
-SCOPE = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
+SCOPE = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
 def get_gspread_client():
-    """驗證並取得 Google Sheets 控制權"""
-    # 優先從 GitHub Secrets 讀取 (JSON 字串)
+    """取得 Google Sheets 控制權 (支援本地與 GitHub)"""
     creds_json = os.environ.get("GCP_SERVICE_ACCOUNT_KEY")
-    
     if creds_json:
-        # GitHub Actions 環境
         info = json.loads(creds_json)
         creds = Credentials.from_service_account_info(info, scopes=SCOPE)
     else:
-        # 本地測試環境：請確保資料夾內有 credentials.json
+        # 請確保 credentials.json 在同一個資料夾
         creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPE)
-    
     return gspread.authorize(creds)
 
 # ==========================================
-# 2. 抓取證交所數據 (STOCK_DAY_ALL)
+# 2. 獲取絕對正確的台北時間 (第一優先)
 # ==========================================
-def fetch_twse_data():
-    print("正在從證交所 Open API 抓取全市場行情...")
-    url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
-    
+def get_authoritative_taiwan_time():
+    print("--- 步驟 1: 執行權威時間校準 ---")
     try:
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
+        # 抓取台北標準時間 API
+        response = requests.get("http://worldtimeapi.org/api/timezone/Asia/Taipei", timeout=10)
         data = response.json()
-        
-        df = pd.DataFrame(data)
-        
-        # 轉換欄位名稱 (根據 API 返回的原始欄位進行 mapping)
-        # 欄位說明：Code(代碼), Name(名稱), TradeVolume(成交量), TradeValue(成交金額), 
-        # OpeningPrice(開盤), HighestPrice(最高), LowestPrice(最低), ClosingPrice(收盤)
-        
-        # 核心數據清理
-        df['TradeVolume'] = pd.to_numeric(df['TradeVolume'], errors='coerce').fillna(0)
-        df['OpeningPrice'] = pd.to_numeric(df['OpeningPrice'], errors='coerce')
-        df['HighestPrice'] = pd.to_numeric(df['HighestPrice'], errors='coerce')
-        df['LowestPrice'] = pd.to_numeric(df['LowestPrice'], errors='coerce')
-        df['ClosingPrice'] = pd.to_numeric(df['ClosingPrice'], errors='coerce')
-        
-        # 篩選前 200 名成交量
-        top_200 = df.sort_values(by='TradeVolume', ascending=False).head(200).copy()
-        
-        # 加入日期欄位 (當前系統模擬時間 2026-04-16)
-        # 如果是實際執行，可用 datetime.now().strftime("%Y-%m-%d")
-        top_200['Date'] = "2026-04-16"
-        
-        # 整理輸出欄位
-        result = top_200[['Date', 'Code', 'Name', 'OpeningPrice', 'HighestPrice', 'LowestPrice', 'ClosingPrice', 'TradeVolume']]
-        return result
-    
+        now_taiwan = datetime.fromisoformat(data['datetime'])
+        print(f"網路校準成功: {now_taiwan.strftime('%Y-%m-%d %H:%M:%S')}")
+        return now_taiwan
     except Exception as e:
-        print(f"抓取失敗: {e}")
-        return None
+        print(f"網路校準失敗，使用系統時區備案: {e}")
+        return datetime.now(pytz.timezone('Asia/Taipei'))
+
+def get_target_date(now):
+    """根據當前時間決定：我們該擁有哪一天的完整收盤資料"""
+    # 方案一邏輯：下午 3 點 (15:00) 之後才算今日收盤已完成
+    if now.hour >= 15:
+        target = now.strftime('%Y-%m-%d')
+        print(f"判定結果: 已過今日收盤時間，目標日期為 {target}")
+    else:
+        # 15:00 以前，目標是昨天
+        target = (now - timedelta(days=1)).strftime('%Y-%m-%d')
+        print(f"判定結果: 今日尚未收盤，目標日期為昨日 {target}")
+    return target
 
 # ==========================================
-# 3. 寫入 Google 試算表
+# 3. 資料比對與寫入
 # ==========================================
-def update_google_sheet(df):
-    if df is None or df.empty:
-        print("無資料可寫入")
+def run_scanner():
+    # A. 獲取時間
+    now = get_authoritative_taiwan_time()
+    target_date = get_target_date(now)
+
+    # B. 連線試算表並檢查
+    client = get_gspread_client()
+    sh = client.open_by_key(SHEET_ID)
+    worksheet = sh.get_worksheet(0)
+    
+    # 抓取最後一行的日期 (假設日期在第一欄 A 欄)
+    all_dates = worksheet.col_values(1)
+    last_date = all_dates[-1] if all_dates else ""
+    
+    print(f"試算表最後記錄日期: {last_date}")
+
+    if last_date == target_date:
+        print(f">>> 偵測完成：{target_date} 的資料已存在，符合「方案一」不重複抓取。")
         return
 
+    # C. 抓取證交所數據
+    print(f">>> 偵測到資料缺口，正在從證交所抓取 {target_date} 資料...")
+    url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
     try:
-        client = get_gspread_client()
-        sh = client.open_by_key(SHEET_ID)
+        resp = requests.get(url, timeout=30)
+        df = pd.DataFrame(resp.json())
         
-        # 取得第一個工作表 (或指定名稱)
-        worksheet = sh.get_worksheet(0) 
+        # 清理數據
+        df['TradeVolume'] = pd.to_numeric(df['TradeVolume'], errors='coerce').fillna(0)
+        top_200 = df.sort_values(by='TradeVolume', ascending=False).head(200).copy()
+        top_200['Date'] = target_date # 使用我們校準後的日期
         
-        # 檢查是否為空表 (如果是空的，寫入標頭)
-        existing_data = worksheet.get_all_values()
-        if len(existing_data) == 0:
-            worksheet.append_row(df.columns.tolist())
-            print("已建立表頭")
-
-        # 將 DataFrame 轉為列表格式 (準備批量追加)
-        values = df.values.tolist()
+        # 整理格式
+        result = top_200[['Date', 'Code', 'Name', 'OpeningPrice', 'HighestPrice', 'LowestPrice', 'ClosingPrice', 'TradeVolume']]
         
-        # 執行 Append (續寫)
-        worksheet.append_rows(values)
-        print(f"成功寫入 {len(values)} 筆資料至 Google 試算表！")
-
+        # 寫入 (Append)
+        if len(all_dates) == 0:
+            worksheet.append_row(result.columns.tolist())
+        
+        worksheet.append_rows(result.values.tolist())
+        print(f"成功更新！已寫入 {target_date} 的 200 檔股票資料。")
+        
     except Exception as e:
-        print(f"寫入試算表錯誤: {e}")
+        print(f"抓取或寫入過程出錯: {e}")
 
-# ==========================================
-# 執行主程式
-# ==========================================
 if __name__ == "__main__":
-    market_data = fetch_twse_data()
-    update_google_sheet(market_data)
+    run_scanner()
