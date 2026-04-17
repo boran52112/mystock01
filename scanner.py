@@ -8,115 +8,105 @@ from datetime import datetime, timedelta
 import pytz
 import urllib3
 
-# 告訴 Python 隱藏「安全檢查已關閉」的警告訊息，讓畫面看起來乾淨
+# 隱藏安全警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ==========================================
-# 1. 配置與初始化 (Google 試算表設定)
-# ==========================================
+# --- Configuration ---
 SHEET_ID = "1UH-fwxENhGUDmQjTQJq72g1DzsxML_CPIJGg39cWAgM"
 SCOPE = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
 def get_gspread_client():
-    """取得 Google Sheets 控制權 (支援本地端與 GitHub 雲端)"""
     creds_json = os.environ.get("GCP_SERVICE_ACCOUNT_KEY")
     if creds_json:
-        # GitHub Actions 雲端執行時使用
         info = json.loads(creds_json)
         creds = Credentials.from_service_account_info(info, scopes=SCOPE)
     else:
-        # 本地電腦執行時使用 (請確保資料夾內有 credentials.json)
         creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPE)
     return gspread.authorize(creds)
 
-# ==========================================
-# 2. 獲取絕對正確的台北時間 (確保時間正確)
-# ==========================================
-def get_authoritative_taiwan_time():
-    print("\n--- [第一部分：時間偵測] ---")
+def get_authoritative_time():
+    """雙重校準時間邏輯"""
+    print("--- Step 1: Authoritative Time Check ---")
+    
+    # 嘗試方案 A: WorldTimeAPI
     try:
-        # 抓取台北標準時間 (加入 verify=False 避開安全證書報錯)
-        response = requests.get("http://worldtimeapi.org/api/timezone/Asia/Taipei", timeout=10, verify=False)
-        data = response.json()
-        now_taiwan = datetime.fromisoformat(data['datetime'])
-        print(f"權威機構時間校準成功: {now_taiwan.strftime('%Y-%m-%d %H:%M:%S')}")
-        return now_taiwan
+        print("Trying WorldTimeAPI...")
+        response = requests.get("http://worldtimeapi.org/api/timezone/Asia/Taipei", timeout=8, verify=False)
+        if response.status_code == 200:
+            now = datetime.fromisoformat(response.json()['datetime'])
+            print(f"Success (WorldTimeAPI): {now.strftime('%Y-%m-%d %H:%M:%S')}")
+            return now
     except Exception as e:
-        print(f"網路校準失敗，使用系統時區備案 (請確保電腦時間正確): {e}")
-        return datetime.now(pytz.timezone('Asia/Taipei'))
+        print(f"WorldTimeAPI failed: {e}")
 
-def get_target_date(now):
-    """根據時間決定要抓哪一天的資料 (方案一：收盤派)"""
-    # 如果現在是下午 3 點 (15:00) 之後，目標就是今日
-    if now.hour >= 15:
-        target = now.strftime('%Y-%m-%d')
-        print(f"判定結果：今日收盤已完成，抓取今日 ({target}) 數據。")
-    else:
-        # 否則，目標日期就是昨天 (或上個交易日)
-        target = (now - timedelta(days=1)).strftime('%Y-%m-%d')
-        print(f"判定結果：今日尚未收盤，抓取昨日 ({target}) 數據。")
-    return target
+    # 嘗試方案 B: 從 Google 的標頭抓取時間 (極度穩定)
+    try:
+        print("Trying Google Time Server...")
+        res = requests.get("https://www.google.com", timeout=8)
+        # Google 的 Header 裡會有 Date: Sat, 08 Feb 2025 12:00:00 GMT
+        g_date = res.headers['Date']
+        # 轉換為台灣時間 (UTC+8)
+        now = datetime.strptime(g_date, '%a, %d %b %Y %H:%M:%S %Z').replace(tzinfo=pytz.UTC).astimezone(pytz.timezone('Asia/Taipei'))
+        print(f"Success (Google Server): {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        return now
+    except Exception as e:
+        print(f"Google Time failed: {e}")
 
-# ==========================================
-# 3. 資料比對與執行
-# ==========================================
+    # 方案 C: 系統時間備案
+    print("Warning: Using System Clock as last resort.")
+    return datetime.now(pytz.timezone('Asia/Taipei'))
+
 def run_scanner():
-    # A. 獲取正確時間
-    now_time = get_authoritative_taiwan_time()
-    target_date = get_target_date(now_time)
+    # 1. 獲取校準時間
+    now_taiwan = get_authoritative_time()
+    
+    # 決定目標日期 (方案一：收盤派)
+    if now_taiwan.hour >= 15:
+        target_date = now_taiwan.strftime('%Y-%m-%d')
+        print(f"Decision: Market closed. Target is Today ({target_date})")
+    else:
+        target_date = (now_taiwan - timedelta(days=1)).strftime('%Y-%m-%d')
+        print(f"Decision: Market open or early. Target is Yesterday ({target_date})")
 
-    # B. 連線 Google 試算表
-    print("\n--- [第二部分：資料庫比對] ---")
+    print("\n--- Step 2: Database Sync ---")
     try:
         client = get_gspread_client()
         sh = client.open_by_key(SHEET_ID)
         worksheet = sh.get_worksheet(0)
         
-        # 檢查 A 欄的第一個欄位 (日期)，看最後一筆是幾號
         all_dates = worksheet.col_values(1)
-        last_date_in_sheet = all_dates[-1] if all_dates else ""
-        print(f"試算表最後記錄日期為: {last_date_in_sheet}")
+        last_date = all_dates[-1] if all_dates else ""
+        print(f"Last recorded date: {last_date}")
 
-        # 比對：如果最後日期跟目標日期一樣，就停止
-        if last_date_in_sheet == target_date:
-            print(f"結果：{target_date} 資料已存在。不重複更新，程式結束。")
+        if last_date == target_date:
+            print(f"Result: Data for {target_date} already exists. Mission aborted.")
             return
         
-        # C. 開始抓取證交所資料
-        print(f"\n--- [第三部分：抓取與寫入] ---")
-        print(f"正在連線證交所抓取 {target_date} 的行情...")
+        print("\n--- Step 3: Fetching TWSE Data ---")
         url = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
-        
-        # 加入 verify=False 避開安全證書報錯
         resp = requests.get(url, timeout=30, verify=False)
         data = resp.json()
         
         if not data:
-            print("錯誤：證交所目前未提供資料 (可能是假日)。")
+            print("Error: No data received from TWSE.")
             return
-            
+
         df = pd.DataFrame(data)
-        
-        # 數據清理：將成交量轉為數字，並取前 200 名
         df['TradeVolume'] = pd.to_numeric(df['TradeVolume'], errors='coerce').fillna(0)
         top_200 = df.sort_values(by='TradeVolume', ascending=False).head(200).copy()
-        
-        # 強制標註我們校準後的目標日期
         top_200['Date'] = target_date 
         
-        # 整理欄位順序
         result = top_200[['Date', 'Code', 'Name', 'OpeningPrice', 'HighestPrice', 'LowestPrice', 'ClosingPrice', 'TradeVolume']]
         
-        # 如果表單是空的，先寫入標頭 (Title)
         if len(all_dates) == 0:
             worksheet.append_row(result.columns.tolist())
             
-        # 寫入 200 筆資料
         worksheet.append_rows(result.values.tolist())
-        print(f"成功！已將 {target_date} 的 200 筆資料存入 Google 試算表。")
+        print(f"--- SUCCESS! {target_date} data saved to Google Sheets ---")
 
     except Exception as e:
-        print(f"發生錯誤：{e}")
+        print(f"Process failed: {e}")
 
 if __name__ == "__main__":
+    print("========== Taiwan Stock AI Scanner v4.2 ==========")
     run_scanner()
