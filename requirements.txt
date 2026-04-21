@@ -1,9 +1,6 @@
-streamlit
+yfinance
 pandas
 pandas_ta
-requests
 gspread
 google-auth
-google-genai
-pandas_ta
-yfinance
+requests
