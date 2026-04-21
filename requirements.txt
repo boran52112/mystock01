@@ -4,7 +4,7 @@ pandas_ta
 yfinance
 gspread
 google-auth
+google-generativeai
 requests
 pytz
-groq
 tabulate
