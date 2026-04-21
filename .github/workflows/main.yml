@@ -2,7 +2,7 @@ name: Taiwan Stock AI Daily Scanner
 
 on:
   schedule:
-    - cron: '30 7 * * 1-5' # 台灣時間週一至五 15:30 執行
+    - cron: '0 7 * * 1-5'
   workflow_dispatch:
 
 jobs:
