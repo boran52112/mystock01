@@ -9,12 +9,10 @@ import pytz
 from datetime import datetime
 
 # ==========================================
-# 1. 獲取精準台灣時間 (國家標準時間邏輯)
+# 1. 獲取精準台灣時間
 # ==========================================
 def get_taiwan_date():
-    # 設定台灣時區
     tz = pytz.timezone('Asia/Taipei')
-    # 直接獲取目前的台灣時間
     tw_now = datetime.now(tz)
     return tw_now.strftime('%Y-%m-%d')
 
@@ -22,10 +20,9 @@ def get_taiwan_date():
 # 2. Google 試算表連線設定
 # ==========================================
 def setup_google_sheets():
-    # 對應 YAML 檔案中的環境變數名稱
     creds_json = os.environ.get('GCP_SERVICE_ACCOUNT_KEY')
     if not creds_json:
-        raise ValueError("找不到 GCP_SERVICE_ACCOUNT_KEY，請檢查 GitHub Secrets 設定。")
+        raise ValueError("找不到 GCP_SERVICE_ACCOUNT_KEY")
     
     info = json.loads(creds_json)
     info['private_key'] = info['private_key'].replace('\\n', '\n')
@@ -34,7 +31,6 @@ def setup_google_sheets():
     creds = Credentials.from_service_account_info(info, scopes=scope)
     client = gspread.authorize(creds)
     
-    # 試算表 ID
     sheet_id = "1UH-fwxENhGUDmQjTQJq72g1DzsxML_CPIJGg39cWAgM"
     sh = client.open_by_key(sheet_id)
     return sh.get_worksheet(0)
@@ -52,17 +48,19 @@ def run_scanner():
         "MA5", "MA20", "RSI14", "K", "D", "MACD", "BB_Upper", "BB_Lower", "漲跌幅%"
     ]
     
-    # 自動整地：檢查第一列標題，若不符則初始化
+    # --- 強制整地邏輯 ---
     try:
         existing_headers = wks.row_values(1)
-        if not existing_headers or existing_headers[0] != "日期":
-            print("初始化試算表欄位...")
-            wks.clear()
-            wks.insert_row(headers, 1)
-    except:
+        # 如果標題長度不到 17，代表是舊格式，強制重寫
+        if len(existing_headers) < 17:
+            print("檢測到舊版格式，正在強制更新標題欄位...")
+            # 我們不刪除舊資料，只把第一列標題換掉
+            wks.update('A1', [headers]) 
+    except Exception as e:
+        print(f"整地時發生錯誤: {e}")
         wks.insert_row(headers, 1)
 
-    # 監測清單
+    # 監測清單 (你可以自行修改這些股號)
     stock_list = {
         "2330.TW": "台積電", "2317.TW": "鴻海", "2454.TW": "聯發科",
         "2308.TW": "台達電", "2382.TW": "廣達", "2881.TW": "富邦金",
@@ -74,7 +72,6 @@ def run_scanner():
     for symbol, name in stock_list.items():
         try:
             print(f"正在分析: {symbol}...")
-            # 抓取 3 個月資料計算指標
             df = yf.download(symbol, period="3mo", interval="1d", progress=False)
             if df.empty: continue
             
@@ -92,7 +89,6 @@ def run_scanner():
             df['BB_L'] = bb['BBL_20_2.0']
             df['Chg'] = df['Close'].pct_change() * 100
             
-            # 取得最新一筆數據
             latest = df.iloc[-1]
             
             row = [
@@ -116,10 +112,9 @@ def run_scanner():
         except Exception as e:
             print(f"{symbol} 出錯: {e}")
 
-    # 寫入試算表
     if final_rows:
         wks.append_rows(final_rows)
-        print(f"成功更新 {len(final_rows)} 筆台灣標準時間數據！")
+        print(f"成功更新 {len(final_rows)} 筆指標數據！日期：{today_date}")
 
 if __name__ == "__main__":
     run_scanner()
