@@ -1,9 +1,12 @@
 import streamlit as st
 import pandas as pd
+import pandas_ta as ta
+import yfinance as yf
 import gspread
 from google.oauth2.service_account import Credentials
-from google import genai
+import google.generativeai as genai  # <-- 修正這裡
 import json
+import os
 
 # ==========================================
 # 1. 系統初始化與金鑰連線
