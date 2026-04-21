@@ -1,9 +1,10 @@
-yfinance
+streamlit
 pandas
 pandas_ta
+yfinance
 gspread
 google-auth
 requests
 pytz
-google-generativeai
-st-gsheets-connection
+groq
+tabulate
