@@ -4,3 +4,4 @@ pandas_ta
 gspread
 google-auth
 requests
+pytz
