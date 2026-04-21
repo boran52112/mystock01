@@ -5,3 +5,5 @@ gspread
 google-auth
 requests
 pytz
+google-generativeai
+st-gsheets-connection
