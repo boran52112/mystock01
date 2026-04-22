@@ -84,7 +84,7 @@ def extract_best_block(text, block_num):
 def call_ai_detective(prompt):
     try:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        model = genai.GenerativeModel('gemma-4-31b-it')
         response = model.generate_content(prompt)
         return response.text
     except Exception as e: return f"AI 偵探錯誤: {str(e)}"
