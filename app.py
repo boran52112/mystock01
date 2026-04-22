@@ -70,7 +70,7 @@ def fetch_smart_yf(stock_id):
 def call_ai_detective(prompt):
     try:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        model = genai.GenerativeModel('gemini-1.5-pro')
+        model = genai.GenerativeModel('gemma-4-31b-it')
         response = model.generate_content(prompt)
         return response.text
     except Exception as e:
