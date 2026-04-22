@@ -6,8 +6,9 @@ import google.generativeai as genai
 from google.oauth2.service_account import Credentials
 import yfinance as yf
 import re
+import numpy as np
 
-# --- 1. 視覺優化 ---
+# --- 1. 視覺優化 (手機版加大字體) ---
 st.set_page_config(page_title="台股 AI 偵探系統 v5.0", layout="wide")
 st.markdown("""
     <style>
@@ -26,7 +27,7 @@ if 'current_name' not in st.session_state: st.session_state.current_name = ""
 
 SHEET_ID = "1UH-fwxENhGUDmQjTQJq72g1DzsxML_CPIJGg39cWAgM"
 
-# --- 2. 數據核心 ---
+# --- 2. 數據核心：讀取試算表 ---
 def get_data_from_sheets():
     try:
         creds_json_str = st.secrets["gcp_service_account_raw"]
@@ -38,44 +39,65 @@ def get_data_from_sheets():
         return pd.DataFrame(sheet.get_all_records())
     except: return pd.DataFrame()
 
-def fetch_smart_yf(stock_id):
+# --- 3. 後端計算引擎：即時算齊九大指標 ---
+def fetch_and_calculate_all(stock_id):
     suffixes = ["", ".TW", ".TWO"]
     for suf in suffixes:
         test_id = f"{stock_id}{suf}"
         try:
-            df_yf = yf.download(test_id, period="2mo", progress=False)
-            if not df_yf.empty and len(df_yf) > 20:
-                df_yf['MA5'] = df_yf['Close'].rolling(window=5).mean()
-                df_yf['MA20'] = df_yf['Close'].rolling(window=20).mean()
-                delta = df_yf['Close'].diff()
-                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                df_yf['RSI14'] = 100 - (100 / (1 + (gain / loss)))
-                df_yf = df_yf.reset_index().tail(5)
-                return pd.DataFrame({
-                    '日期': df_yf['Date'].dt.strftime('%Y-%m-%d'),
-                    '股號': test_id, '股名': "即時救援",
-                    '收盤價': df_yf['Close'], '成交量': df_yf['Volume'],
-                    'MA5': df_yf['MA5'], 'MA20': df_yf['MA20'], 'RSI14': df_yf['RSI14']
-                })
+            df = yf.download(test_id, period="3mo", progress=False) # 抓3個月以利計算MA20和MACD
+            if df.empty or len(df) < 25: continue
+            
+            # 1. 均線 MA
+            df['MA5'] = df['Close'].rolling(window=5).mean()
+            df['MA20'] = df['Close'].rolling(window=20).mean()
+            
+            # 2. RSI14
+            delta = df['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            df['RSI14'] = 100 - (100 / (1 + (gain / loss)))
+            
+            # 3. KDJ (9,3,3)
+            low_list = df['Low'].rolling(9).min()
+            high_list = df['High'].rolling(9).max()
+            rsv = (df['Close'] - low_list) / (high_list - low_list) * 100
+            df['KDJ_K'] = rsv.ewm(com=2).mean()
+            df['KDJ_D'] = df['KDJ_K'].ewm(com=2).mean()
+            
+            # 4. MACD (12,26,9)
+            exp1 = df['Close'].ewm(span=12, adjust=False).mean()
+            exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+            df['MACD'] = exp1 - exp2
+            
+            # 5. 布林通道 (20, 2)
+            df['BB_Mid'] = df['MA20']
+            df['BB_Std'] = df['Close'].rolling(window=20).std()
+            df['BB_Upper'] = df['BB_Mid'] + (df['BB_Std'] * 2)
+            
+            # 抓取股名 (yfinance info)
+            try:
+                name = yf.Ticker(test_id).info.get('longName', '未知')
+            except: name = "即時偵測"
+
+            df = df.reset_index().tail(5)
+            return pd.DataFrame({
+                '日期': df['Date'].dt.strftime('%Y-%m-%d'),
+                '股號': test_id, '股名': name,
+                '收盤價': df['Close'], '成交量': df['Volume'],
+                'MA5': df['MA5'], 'MA20': df['MA20'], 'RSI14': df['RSI14'],
+                'K值': df['KDJ_K'], 'D值': df['KDJ_D'], 'MACD': df['MACD'],
+                '布林上軌': df['BB_Upper']
+            })
         except: continue
     return pd.DataFrame()
 
-# --- 3. 內容清洗器 (專治 LaTeX 與 冗贅英文) ---
+# --- 4. 內容清洗與 AI 調用 ---
 def clean_ai_content(text):
-    # 替換 LaTeX 箭頭符號為一般箭頭
-    text = text.replace(r'$\rightarrow$', ' → ')
-    text = text.replace(r'\rightarrow', ' → ')
-    text = text.replace('$', '') # 移除錢字號干擾
-    
+    text = text.replace(r'$\rightarrow$', ' → ').replace(r'\rightarrow', ' → ').replace('$', '')
     lines = text.split('\n')
-    cleaned_lines = []
-    for line in lines:
-        # 過濾包含 AI 自言自語特徵的行
-        if re.search(r'(Wait|prompt|label|verify|check|English|Input Data|template)', line, re.IGNORECASE) and len(re.findall(r'[a-zA-Z]+', line)) > 3:
-            continue
-        cleaned_lines.append(line)
-    return '\n'.join(cleaned_lines).strip()
+    cleaned = [l for l in lines if not re.search(r'(Wait|prompt|label|verify|check|English|Input|template)', l, re.IGNORECASE)]
+    return '\n'.join(cleaned).strip()
 
 def extract_best_block(text, block_num):
     pattern = rf"\[區塊{block_num}\](.*?)\[/區塊{block_num}\]"
@@ -87,59 +109,66 @@ def call_ai_detective(prompt):
     try:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
         model = genai.GenerativeModel('gemma-4-31b-it')
-        response = model.generate_content(prompt)
-        return response.text
+        return model.generate_content(prompt).text
     except Exception as e: return f"偵探連線錯誤: {str(e)}"
 
-# --- 4. 主程式 ---
+# --- 5. 主程式 ---
 def main():
-    st.title("🕵️‍♂️ 台股 AI 偵探戰情室")
+    st.title("🕵️‍♂️ 台股 AI 偵探戰情室 (全市場版)")
     
-    user_input = st.text_input("🔢 請輸入股號 (例如: 2330)", placeholder="輸入純數字即可").strip()
+    user_input = st.text_input("🔢 請輸入股號 (例如: 2330)", placeholder="輸入代碼，系統自動計算全指標").strip()
     if st.button("🔍 開始偵查") and user_input:
-        with st.spinner("調閱檔案中..."):
+        with st.spinner("正在調閱數據並計算指標..."):
             df_all = get_data_from_sheets()
             df_selected = pd.DataFrame()
+            # 優先找試算表
             if not df_all.empty and '股號' in df_all.columns:
                 df_all['股號'] = df_all['股號'].astype(str)
                 df_selected = df_all[df_all['股號'].str.contains(user_input)].tail(5)
-            if df_selected.empty: df_selected = fetch_smart_yf(user_input)
+            
+            # 若試算表沒資料，啟動後端計算引擎
+            if df_selected.empty:
+                st.toast(f"資料庫查無 {user_input}，已啟動即時計算引擎...")
+                df_selected = fetch_and_calculate_all(user_input)
             
             if not df_selected.empty:
                 st.session_state.stock_data = df_selected
                 st.session_state.current_id = df_selected['股號'].iloc[-1]
-                st.session_state.current_name = df_selected['股名'].iloc[-1] if '股名' in df_selected.columns else ""
-            else: st.error("查無資料")
+                st.session_state.current_name = df_selected['股名'].iloc[-1]
+            else: st.error("查無此股，請確認代碼。")
 
     if st.session_state.stock_data is not None:
         df_display = st.session_state.stock_data
-        full_display_name = f"{st.session_state.current_id} {st.session_state.current_name}"
-        st.subheader(f"📊 {full_display_name} 指標觀測站")
+        full_name = f"{st.session_state.current_id} {st.session_state.current_name}"
+        st.subheader(f"📊 {full_name} 指標觀測站")
         
-        # 格式化數值：收盤/均線/RSI 取2位，成交量整數
-        fmt_df = df_display[['日期', '收盤價', '成交量', 'MA5', 'MA20', 'RSI14']].copy()
-        st.table(fmt_df.style.format({
+        # 統一表格顯示
+        show_cols = ['日期', '收盤價', '成交量', 'MA5', 'MA20', 'RSI14']
+        st.table(df_display[show_cols].style.format({
             '收盤價': '{:,.2f}', 'MA5': '{:,.2f}', 'MA20': '{:,.2f}', 
             'RSI14': '{:,.2f}', '成交量': '{:,.0f}'
         }))
 
-        if st.button(f"🚀 啟動 {full_display_name} 深度診斷"):
-            with st.spinner("偵探交叉比對中..."):
-                data_text = fmt_df.to_string(index=False)
+        if st.button(f"🚀 啟動 {full_name} 深度診斷"):
+            with st.spinner("AI 偵探正在判讀全市場數據..."):
+                # 把所有計算出來的指標都餵給 AI
+                data_text = df_display.to_string(index=False)
                 prompt = f"""你是台股 AI 偵探。請呈現分析結果就好，並且以繁體中文顯示，如果是英文也請自動翻譯。請對分析結果與診斷以繁體中文說明，內容請以詳細教學內容為主，讓我可以清楚推斷的依據。
 【關鍵指令】：嚴禁使用 LaTeX 數學符號（如 $ 符號）、英文僅用在專有名詞部分。使用一般箭頭 →。
 請直接填入標籤，不要有任何標籤外的文字。
+多一點教學內容，讓使用者更清楚判斷的依據相關的理論。
 
 [區塊1]
-1. 5日均線：根據某某理論...，所以.....
-2. 20日均線：根據某某理論...，所以.....
-3. RSI14：根據某某理論...，所以.....
-4. KDJ-K值：根據某某理論...，所以.....
-5. KDJ-D值：根據某某理論...，所以.....
-6. MACD動能：根據某某理論...，所以.....
-7. 布林通道：根據某某理論...，所以.....
-8. 量價背離關係：根據某某理論...，所以.....
-9. 近5日漲跌連續性：根據某某理論...，所以.....
+【九項指標趨勢深度判讀】：
+1. 5/20日均線走向與排列：根據某某理論...，所以.....
+2. RSI14強弱與動能：根據某某理論...，所以...
+3. KDJ(K/D值)轉折分析：根據某某理論...，所以...
+4. MACD柱狀體動能變化：根據某某理論...，所以...
+5. 布林通道相對位置與擠壓：根據某某理論...，所以...
+6. 量價背離與動能支撐關係：根據某某理論...，所以...
+7. 近5日漲跌連續性與市場情緒：根據某某理論...，所以...
+8. 關鍵支撐與壓力位判斷：根據某某理論...，所以...
+9. 整體多空力道權重：根據某某理論...，所以...
 [/區塊1]
 
 [區塊2]
@@ -149,8 +178,8 @@ def main():
 
 [區塊3]
 【全方位操作戰略：雙重劇本】：
-- 保守型劇本：請提供價位或者條件參考，並請提醒需要哪些條件配合？例如某些指標的支持或者數字多少
-- 激進型劇本：請提供價位或者條件參考，並請提醒需要哪些條件配合？例如某些指標的支持或者數字多少
+- 保守型劇本：(建議進場/停損/持股，請提供價位或者條件參考，並請提醒需要哪些條件配合？例如某些指標的支持或者數字多少)
+- 激進型劇本：(建議突破/目標/短線，請提供價位或者條件參考，並請提醒需要哪些條件配合？例如某些指標的支持或者數字多少)
 [/區塊3]
 
 [區塊4]
@@ -161,26 +190,14 @@ def main():
 
 數據來源：
 {data_text}"""
-                
                 ans = call_ai_detective(prompt)
-                blocks = {
-                    1: ("第一區塊：【九項指標趨勢深度判讀】", extract_best_block(ans, 1)),
-                    2: ("第二區塊：【指標矛盾整合與風險抓漏】", extract_best_block(ans, 2)),
-                    3: ("第三區塊：【全方位操作戰略：雙重劇本】", extract_best_block(ans, 3)),
-                    4: ("第四區塊：【偵探總結與信心分數】", extract_best_block(ans, 4))
-                }
-
+                blocks = {1: "九項指標判讀", 2: "指標矛盾與教學", 3: "雙重劇本", 4: "總結與信心"}
                 st.markdown("---")
-                st.subheader(f"🛡️ 偵探診斷報告：{full_display_name}")
+                st.subheader(f"🛡️ 偵探診斷報告：{full_name}")
                 for i in range(1, 5):
-                    title, content = blocks[i]
+                    content = extract_best_block(ans, i)
                     if content:
-                        st.markdown(f"""
-                        <div class="report-card">
-                            <span class="indicator-label">{title}</span>
-                            {content.replace('\n', '<br>')}
-                        </div>
-                        """, unsafe_allow_html=True)
+                        st.markdown(f'<div class="report-card"><span class="indicator-label">第{i}區塊：{blocks[i]}</span>{content.replace("\n", "<br>")}</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
