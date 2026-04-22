@@ -8,7 +8,7 @@ import yfinance as yf
 import re
 import numpy as np
 
-# --- 1. 視覺優化 (手機版加大字體) ---
+# --- 1. 視覺優化 (維持手機大字體與專業卡片) ---
 st.set_page_config(page_title="台股 AI 偵探系統 v5.0", layout="wide")
 st.markdown("""
     <style>
@@ -39,64 +39,70 @@ def get_data_from_sheets():
         return pd.DataFrame(sheet.get_all_records())
     except: return pd.DataFrame()
 
-# --- 3. 後端計算引擎：即時算齊九大指標 ---
+# --- 3. 全市場計算引擎 (確保九大指標數據完整) ---
 def fetch_and_calculate_all(stock_id):
-    suffixes = ["", ".TW", ".TWO"]
+    suffixes = [".TW", ".TWO", ""]
     for suf in suffixes:
         test_id = f"{stock_id}{suf}"
         try:
-            df = yf.download(test_id, period="3mo", progress=False) # 抓3個月以利計算MA20和MACD
-            if df.empty or len(df) < 25: continue
+            df = yf.download(test_id, period="4mo", progress=False, auto_adjust=False) 
+            if df.empty or len(df) < 20: continue
             
-            # 1. 均線 MA
-            df['MA5'] = df['Close'].rolling(window=5).mean()
-            df['MA20'] = df['Close'].rolling(window=20).mean()
+            # 處理 MultiIndex
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
             
-            # 2. RSI14
-            delta = df['Close'].diff()
+            close = df['Close'].squeeze()
+            high = df['High'].squeeze()
+            low = df['Low'].squeeze()
+
+            # 計算 AI 需要的所有指標
+            df['MA5'] = close.rolling(window=5).mean()
+            df['MA20'] = close.rolling(window=20).mean()
+            delta = close.diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             df['RSI14'] = 100 - (100 / (1 + (gain / loss)))
             
-            # 3. KDJ (9,3,3)
-            low_list = df['Low'].rolling(9).min()
-            high_list = df['High'].rolling(9).max()
-            rsv = (df['Close'] - low_list) / (high_list - low_list) * 100
-            df['KDJ_K'] = rsv.ewm(com=2).mean()
-            df['KDJ_D'] = df['KDJ_K'].ewm(com=2).mean()
+            low_9 = low.rolling(9).min()
+            high_9 = high.rolling(9).max()
+            rsv = (close - low_9) / (high_9 - low_9) * 100
+            df['K值'] = rsv.ewm(com=2).mean()
+            df['D值'] = df['K值'].ewm(com=2).mean()
             
-            # 4. MACD (12,26,9)
-            exp1 = df['Close'].ewm(span=12, adjust=False).mean()
-            exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+            exp1 = close.ewm(span=12, adjust=False).mean()
+            exp2 = close.ewm(span=26, adjust=False).mean()
             df['MACD'] = exp1 - exp2
             
-            # 5. 布林通道 (20, 2)
             df['BB_Mid'] = df['MA20']
-            df['BB_Std'] = df['Close'].rolling(window=20).std()
-            df['BB_Upper'] = df['BB_Mid'] + (df['BB_Std'] * 2)
+            df['BB_Std'] = close.rolling(window=20).std()
+            df['布林上軌'] = df['BB_Mid'] + (df['BB_Std'] * 2)
             
-            # 抓取股名 (yfinance info)
+            name = "全市場即時偵測"
             try:
-                name = yf.Ticker(test_id).info.get('longName', '未知')
-            except: name = "即時偵測"
+                ticker_info = yf.Ticker(test_id).info
+                name = ticker_info.get('shortName', ticker_info.get('longName', "未知"))
+            except: pass
 
-            df = df.reset_index().tail(5)
+            df_final = df.reset_index().tail(5)
+            # 建立與 Prompt 需求一致的資料結構
             return pd.DataFrame({
-                '日期': df['Date'].dt.strftime('%Y-%m-%d'),
+                '日期': df_final['Date'].dt.strftime('%Y-%m-%d'),
                 '股號': test_id, '股名': name,
-                '收盤價': df['Close'], '成交量': df['Volume'],
-                'MA5': df['MA5'], 'MA20': df['MA20'], 'RSI14': df['RSI14'],
-                'K值': df['KDJ_K'], 'D值': df['KDJ_D'], 'MACD': df['MACD'],
-                '布林上軌': df['BB_Upper']
+                '收盤價': df_final['Close'], '成交量': df_final['Volume'],
+                'MA5': df_final['MA5'], 'MA20': df_final['MA20'], 
+                'RSI14': df_final['RSI14'], 'K值': df_final['K值'], 
+                'D值': df_final['D值'], 'MACD': df_final['MACD'], 
+                '布林上軌': df_final['布林上軌']
             })
         except: continue
     return pd.DataFrame()
 
-# --- 4. 內容清洗與 AI 調用 ---
+# --- 4. 雜訊清洗與 AI 調用 ---
 def clean_ai_content(text):
     text = text.replace(r'$\rightarrow$', ' → ').replace(r'\rightarrow', ' → ').replace('$', '')
     lines = text.split('\n')
-    cleaned = [l for l in lines if not re.search(r'(Wait|prompt|label|verify|check|English|Input|template)', l, re.IGNORECASE)]
+    cleaned = [l for l in lines if not re.search(r'(Wait|prompt|label|verify|check|English|Input|template|drafting)', l, re.IGNORECASE)]
     return '\n'.join(cleaned).strip()
 
 def extract_best_block(text, block_num):
@@ -114,35 +120,34 @@ def call_ai_detective(prompt):
 
 # --- 5. 主程式 ---
 def main():
-    st.title("🕵️‍♂️ 台股 AI 偵探戰情室 (全市場版)")
+    st.title("🕵️‍♂️ 台股 AI 偵探戰情室")
     
-    user_input = st.text_input("🔢 請輸入股號 (例如: 2330)", placeholder="輸入代碼，系統自動計算全指標").strip()
+    user_input = st.text_input("🔢 請輸入股號 (例如: 2330 或 3518)", placeholder="輸入代碼，系統自動調閱數據").strip()
+    
     if st.button("🔍 開始偵查") and user_input:
-        with st.spinner("正在調閱數據並計算指標..."):
+        with st.spinner(f"正在搜尋 {user_input} 指標數據..."):
             df_all = get_data_from_sheets()
             df_selected = pd.DataFrame()
-            # 優先找試算表
             if not df_all.empty and '股號' in df_all.columns:
                 df_all['股號'] = df_all['股號'].astype(str)
                 df_selected = df_all[df_all['股號'].str.contains(user_input)].tail(5)
             
-            # 若試算表沒資料，啟動後端計算引擎
             if df_selected.empty:
-                st.toast(f"資料庫查無 {user_input}，已啟動即時計算引擎...")
                 df_selected = fetch_and_calculate_all(user_input)
             
             if not df_selected.empty:
                 st.session_state.stock_data = df_selected
                 st.session_state.current_id = df_selected['股號'].iloc[-1]
                 st.session_state.current_name = df_selected['股名'].iloc[-1]
-            else: st.error("查無此股，請確認代碼。")
+            else:
+                st.error(f"❌ 查無此股 {user_input} 資料")
 
     if st.session_state.stock_data is not None:
         df_display = st.session_state.stock_data
         full_name = f"{st.session_state.current_id} {st.session_state.current_name}"
         st.subheader(f"📊 {full_name} 指標觀測站")
         
-        # 統一表格顯示
+        # 顯示區：常用指標表格
         show_cols = ['日期', '收盤價', '成交量', 'MA5', 'MA20', 'RSI14']
         st.table(df_display[show_cols].style.format({
             '收盤價': '{:,.2f}', 'MA5': '{:,.2f}', 'MA20': '{:,.2f}', 
@@ -150,9 +155,11 @@ def main():
         }))
 
         if st.button(f"🚀 啟動 {full_name} 深度診斷"):
-            with st.spinner("AI 偵探正在判讀全市場數據..."):
-                # 把所有計算出來的指標都餵給 AI
+            with st.spinner("AI 偵探正在套用技術理論進行深度分析..."):
+                # 準備要給 AI 的完整九項指標數據
                 data_text = df_display.to_string(index=False)
+                
+                # --- 指揮官指定：原版深度教學 Prompt ---
                 prompt = f"""你是台股 AI 偵探。請呈現分析結果就好，並且以繁體中文顯示，如果是英文也請自動翻譯。請對分析結果與診斷以繁體中文說明，內容請以詳細教學內容為主，讓我可以清楚推斷的依據。
 【關鍵指令】：嚴禁使用 LaTeX 數學符號（如 $ 符號）、英文僅用在專有名詞部分。使用一般箭頭 →。
 請直接填入標籤，不要有任何標籤外的文字。
@@ -190,6 +197,7 @@ def main():
 
 數據來源：
 {data_text}"""
+                
                 ans = call_ai_detective(prompt)
                 blocks = {1: "九項指標判讀", 2: "指標矛盾與教學", 3: "雙重劇本", 4: "總結與信心"}
                 st.markdown("---")
