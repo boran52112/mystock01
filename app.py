@@ -1,36 +1,42 @@
 import streamlit as st
 import pandas as pd
 import gspread
+import json
+import google.generativeai as genai
 from google.oauth2.service_account import Credentials
 
 # --- 1. 初始化與環境設定 ---
 st.set_page_config(page_title="台股 AI 偵探系統 v5.0", layout="wide")
 
-# 設定 2026 模擬環境模型與時間
+# 設定 2026 模擬環境時間
 CURRENT_DATE = "2026-04-22"
-MODEL_NAME = "models/gemma-4-31b-it"
 
-# --- 2. Google 試算表連線函式 ---
+# --- 2. Google 試算表連線函式 (對應您的 Secrets 名稱) ---
 def get_data_from_sheets():
-    # 這裡請確保您的憑證檔案名稱正確
+    # 從 Secrets 讀取原始 JSON 字串
+    creds_json_str = st.secrets["gcp_service_account_raw"]
+    # 將字串轉換為 Python 字典
+    creds_info = json.loads(creds_json_str)
+    
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-    creds = Credentials.from_service_account_file('credentials.json', scopes=scope)
+    creds = Credentials.from_service_account_info(creds_info, scopes=scope)
     client = gspread.authorize(creds)
     
-    # 開啟試算表 (請填入您的試算表名稱)
+    # 【注意】請確保您的試算表名稱正確，若改名請修改這裡
     sheet = client.open("台股AI偵探數據庫").sheet1 
     data = sheet.get_all_records()
     return pd.DataFrame(data)
 
 # --- 3. AI 模型調用函式 ---
 def call_ai_detective(prompt):
-    # 這裡串接您原本的 AI 調用邏輯
-    # 假設使用 st.secrets 或直接調用
+    # 設定 API Key
+    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+    # 使用 2026 環境指定的模型
+    model = genai.GenerativeModel('gemini-1.5-pro') # 這裡建議先用穩定版，若環境有特定模型再調整
+    
     try:
-        # 模擬呼叫模型 (請替換為您實際的呼叫代碼)
-        # response = model.generate_content(prompt)
-        # return response.text
-        return "（這是模擬回應，請確保您的 AI API 密鑰已設定）"
+        response = model.generate_content(prompt)
+        return response.text
     except Exception as e:
         return f"AI 偵探回報錯誤: {str(e)}"
 
@@ -42,12 +48,16 @@ def main():
     try:
         df = get_data_from_sheets()
     except Exception as e:
-        st.error(f"無法讀取試算表，請檢查憑證或檔名。錯誤: {e}")
+        st.error(f"無法讀取試算表。請檢查：1. Secrets 名稱是否正確 2. 試算表是否已分享給 Service Account Email。錯誤回報: {e}")
         return
 
     # 側邊欄：選擇股票
-    stock_list = df['Stock_ID'].unique()
-    selected_stock = st.sidebar.selectbox("選擇要診斷的股票", stock_list)
+    if 'Stock_ID' in df.columns:
+        stock_list = df['Stock_ID'].unique()
+        selected_stock = st.sidebar.selectbox("選擇要診斷的股票", stock_list)
+    else:
+        st.error("試算表中找不到 'Stock_ID' 欄位，請檢查數據格式。")
+        return
 
     if selected_stock:
         # 過濾該股最近 5 天數據
@@ -73,8 +83,8 @@ def main():
         existing_cols = [col for col in column_mapping.keys() if col in df_selected.columns]
         display_df = df_selected[existing_cols].rename(columns=column_mapping)
         
-        # 顯示表格
-        st.dataframe(display_df, use_container_width=True)
+        # 顯示美化表格
+        st.dataframe(display_df.style.format(subset=['收盤價', '漲跌幅%'], formatter="{:.2f}"), use_container_width=True)
 
         # --- 第二階段：AI 診斷啟動器 ---
         if st.button(f"🚀 啟動 {selected_stock} AI 深度偵探診斷"):
@@ -83,34 +93,35 @@ def main():
                 # 準備 AI 資料字串
                 data_summary = display_df.to_string(index=False)
                 
-                # 建構強效 Prompt
+                # 建構強效 Prompt (按照指揮官要求的四個區塊)
                 prompt = f"""
-你現在是「台股 AI 偵探系統 v5.0」，禁止輸出英文前言與廢話。
-直接從「第一區塊」開始按照以下格式分析 {selected_stock}：
+你現在是「台股 AI 偵探系統 v5.0」，禁止輸出英文、禁止前言與廢話。
+請針對 {selected_stock} 過去 5 日的數據進行診斷，嚴格遵守以下格式：
 
 數據內容：
 {data_summary}
 
 第一區塊：【九項指標趨勢深度判讀】
-(分析 5/20日線、RSI、KDJ、MACD、布林、量價背離、漲跌連續性、支撐壓力、市場心理)
+(針對 5/20日線、RSI、KDJ、MACD、布林、量價背離、漲跌連續性、支撐壓力、市場心理進行條列式判讀)
 
 第二區塊：【指標矛盾整合與風險抓漏】
-(分析長短線矛盾或量價陷阱)
+(分析數據中的矛盾點，例如價量關係、多空對峙狀況)
 
 第三區塊：【全方位操作戰略：雙重劇本】
-- 保守型劇本：進場點、停損位、持股邏輯
-- 激進型劇本：突破點、目標價、短線策略
+- 保守型劇本：(進場點、停損位、持股邏輯)
+- 激進型劇本：(突破點、目標價、短線策略)
 
 第四區塊：【偵探總結與信心分數】
-總結：(一句話)
+總結：(一句話精闢總結)
 信心分數：(0-100)
 """
                 # 取得 AI 回應
                 raw_response = call_ai_detective(prompt)
                 
-                # 過濾廢話 (只保留「第一區塊」之後的內容)
-                if "第一區塊" in raw_response:
-                    clean_response = raw_response[raw_response.find("第一區塊"):]
+                # 廢話過濾邏輯
+                target_start = "第一區塊"
+                if target_start in raw_response:
+                    clean_response = raw_response[raw_response.find(target_start):]
                 else:
                     clean_response = raw_response
 
