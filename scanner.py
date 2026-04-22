@@ -7,38 +7,44 @@ import os
 import json
 import pytz
 import requests
-import time
 from datetime import datetime
 
 # ==========================================
-# 1. 取得證交所成交量排行 (Top 200)
+# 1. 取得成交量排行 (Top 200) - 加入人類偽裝
 # ==========================================
 def get_top_200_stocks():
     print("正在獲取成交量排行清單...")
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
     url = "https://www.twse.com.tw/exchangeReport/STOCK_DAY_ALL?response=json"
     
     try:
         res = requests.get(url, headers=headers, timeout=15)
         data = res.json()
+        if 'data' not in data: return {"2330.TW": "台積電"}
+        
         df_all = pd.DataFrame(data['data'])
-        df_all[2] = df_all[2].str.replace(',', '').astype(float) # 第2欄是成交股數
+        df_all[2] = df_all[2].str.replace(',', '').astype(float)
         df_top = df_all.sort_values(by=2, ascending=False).head(200)
         
         stock_dict = {}
         for _, row in df_top.iterrows():
-            if len(str(row[0])) <= 5: # 過濾掉權證
+            if len(str(row[0])) <= 5: # 只取股號不取權證
                 stock_dict[f"{row[0]}.TW"] = row[1]
         return stock_dict
     except Exception as e:
-        print(f"清單獲取失敗: {e}，使用備援清單")
+        print(f"清單獲取失敗: {e}")
         return {"2330.TW": "台積電", "2317.TW": "鴻海"}
 
 # ==========================================
 # 2. Google 試算表連線
 # ==========================================
 def setup_google_sheets():
-    creds_json = os.environ.get('GCP_SERVICE_ACCOUNT_KEY')
+    # 對應你 Secrets 中的金鑰名稱 gcp_service_account_raw
+    creds_json = os.environ.get('GCP_SERVICE_ACCOUNT_KEY') # 此處若你在 YAML 設為此名，請維持
+    if not creds_json:
+        # 備援：若開發環境名稱不同
+        creds_json = os.environ.get('gcp_service_account_raw')
+
     info = json.loads(creds_json)
     info['private_key'] = info['private_key'].replace('\\n', '\n')
     scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
@@ -48,32 +54,31 @@ def setup_google_sheets():
     return sh.get_worksheet(0)
 
 # ==========================================
-# 3. 滾動歷史維護 (保留最近 5 天)
+# 3. 核心清理邏輯 (去重 + 滾動 5 天)
 # ==========================================
-def maintenance_rolling_history(wks, max_days=5):
-    print(f"檢查資料庫容量 (目標保留 {max_days} 天)...")
-    all_dates = wks.col_values(1)[1:] # 取得日期欄，跳過標題
-    if not all_dates: return
-
-    unique_dates = sorted(list(set(all_dates))) # 取得不重複日期並排序
+def clean_sheet_data(wks, target_date, max_days=5):
+    print(f"正在清理資料庫，移除日期：{target_date} (若存在)...")
+    all_values = wks.get_all_values()
+    if len(all_values) <= 1: return # 只有標題就不處理
     
-    if len(unique_dates) > max_days:
-        # 找出最老的日期
-        oldest_dates = unique_dates[:(len(unique_dates) - max_days)]
-        print(f"檢測到資料已超過 {max_days} 天，正在移除舊資料: {oldest_dates}")
+    header = all_values[0]
+    rows = all_values[1:]
+    
+    # 1. 移除與本次寫入日期相同的舊資料 (去重)
+    rows = [row for row in rows if row[0] != target_date]
+    
+    # 2. 滾動天數控制 (保留 5 天)
+    unique_dates = sorted(list(set([row[0] for row in rows])))
+    if len(unique_dates) >= max_days:
+        oldest_dates = unique_dates[:(len(unique_dates) - max_days + 1)]
+        print(f"資料庫超過 {max_days} 天，移除最老日期: {oldest_dates}")
+        rows = [row for row in rows if row[0] not in oldest_dates]
         
-        # 獲取所有資料重新過濾 (這是對 Google Sheets 最安全的做法)
-        all_data = wks.get_all_values()
-        header = all_data[0]
-        rows = all_data[1:]
-        
-        # 只保留不屬於 oldest_dates 的資料
-        new_rows = [row for row in rows if row[0] not in oldest_dates]
-        
-        wks.clear()
-        wks.append_row(header)
-        wks.append_rows(new_rows)
-        print("資料庫清理完成。")
+    # 3. 回寫清空後的資料
+    wks.clear()
+    wks.append_row(header)
+    if rows:
+        wks.append_rows(rows)
 
 # ==========================================
 # 4. 主掃描程式
@@ -82,82 +87,68 @@ def run_scanner():
     wks = setup_google_sheets()
     stock_list = get_top_200_stocks()
     
-    headers = [
-        "日期", "股號", "股名", "開盤價", "最高價", "最低價", "收盤價", "成交量",
-        "MA5", "MA20", "RSI14", "K", "D", "MACD", "BB_Upper", "BB_Lower", "漲跌幅%"
-    ]
-    # 如果試算表是空的，先寫入標題
-    if not wks.row_values(1):
-        wks.append_row(headers)
-
     final_rows = []
-    print(f"開始分析 {len(stock_list)} 支熱門股指標...")
+    real_data_date = ""
 
+    print("開始下載並計算技術指標...")
     for symbol, name in stock_list.items():
         try:
             df = yf.download(symbol, period="4mo", interval="1d", progress=False)
-            if df.empty or len(df) < 30: continue
+            if df.empty or len(df) < 25: continue
 
-            # 修正 MultiIndex
+            # 粉碎 MultiIndex
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             
-            # 獲取真實交易日期 (Data Date)
-            real_date = df.index[-1].strftime('%Y-%m-%d')
+            # 取得真實交易日期 (這支股票最後一次成交的日期)
+            real_data_date = df.index[-1].strftime('%Y-%m-%d')
             
             # 指標計算
-            close = df['Close'].squeeze()
-            high = df['High'].squeeze()
-            low = df['Low'].squeeze()
-            
             df.ta.sma(length=5, append=True)
             df.ta.sma(length=20, append=True)
             df.ta.rsi(length=14, append=True)
-            df.ta.stoch(high=high, low=low, close=close, k=9, d=3, append=True)
-            df.ta.macd(close=close, append=True)
-            df.ta.bbands(close=close, length=20, std=2, append=True)
-            df['CHG'] = df['Close'].pct_change() * 100
+            df.ta.stoch(k=9, d=3, append=True)
+            df.ta.macd(append=True)
+            df.ta.bbands(length=20, append=True)
+            df['CHG%'] = df['Close'].pct_change() * 100
 
-            def get_col(keyword):
-                cols = [c for c in df.columns if keyword in c]
-                return df[cols[0]].iloc[-1] if cols else 0
+            # 智慧欄位選取
+            def gv(kw):
+                c = [col for col in df.columns if kw in col]
+                val = df[c[0]].iloc[-1] if c else 0
+                return 0 if pd.isna(val) or val == float('inf') or val == float('-inf') else val
 
             latest = df.iloc[-1]
-            
             row = [
-                real_date, symbol, name,
+                real_data_date, symbol, name,
                 round(float(latest['Open']), 2),
                 round(float(latest['High']), 2),
                 round(float(latest['Low']), 2),
                 round(float(latest['Close']), 2),
                 int(latest['Volume']),
-                round(get_col('SMA_5'), 2),
-                round(get_col('SMA_20'), 2),
-                round(get_col('RSI_14'), 2),
-                round(get_col('STOCHk_9_3_3'), 2),
-                round(get_col('STOCHd_9_3_3'), 2),
-                round(get_col('MACD_12_26_9'), 2),
-                round(get_col('BBU_20_2.0'), 2),
-                round(get_col('BBL_20_2.0'), 2),
-                f"{round(float(latest['CHG']), 2)}%"
+                round(gv('SMA_5'), 2),
+                round(gv('SMA_20'), 2),
+                round(gv('RSI_14'), 2),
+                round(gv('STOCHk_9_3_3'), 2),
+                round(gv('STOCHd_9_3_3'), 2),
+                round(gv('MACD_12_26_9'), 2),
+                round(gv('BBU_20_2.0'), 2),
+                round(gv('BBL_20_2.0'), 2),
+                f"{round(float(latest['CHG%']), 2)}%" if not pd.isna(latest['CHG%']) else "0%"
             ]
             final_rows.append(row)
-            
-            if len(final_rows) % 30 == 0:
-                print(f"進度: {len(final_rows)} 支...")
-
-        except Exception:
+        except:
             continue
 
-    if final_rows:
-        # 寫入新資料 (不刪除舊的，直接往後貼)
-        wks.append_rows(final_rows)
-        print(f"✨ 成功寫入 {len(final_rows)} 筆今日數據。")
+    if final_rows and real_data_date:
+        # 在寫入新資料前，先執行清理去重
+        clean_sheet_data(wks, real_data_date, max_days=5)
         
-        # 執行維護邏輯：保持 5 天歷史
-        maintenance_rolling_history(wks, max_days=5)
+        # 寫入最新資料
+        wks.append_rows(final_rows)
+        print(f"✨ 成功更新 {real_data_date} 的 {len(final_rows)} 筆熱門股數據！")
     else:
-        print("❌ 本次執行未抓取到有效數據。")
+        print("❌ 執行失敗，未獲取任何有效數據。")
 
 if __name__ == "__main__":
     run_scanner()
