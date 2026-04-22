@@ -7,13 +7,21 @@ from google.oauth2.service_account import Credentials
 import yfinance as yf
 import re
 
-# --- 1. 視覺優化 (加大字體 & 戰情室配色) ---
+# --- 1. 視覺優化 (手機大字體 & 專業診斷排版) ---
 st.set_page_config(page_title="台股 AI 偵探系統 v5.0", layout="wide")
 st.markdown("""
     <style>
     .stMarkdown p, .stMarkdown li { font-size: 1.25rem !important; line-height: 1.7; }
     .stTable { font-size: 1.1rem !important; }
-    .report-title { color: #1e3a8a; font-weight: bold; border-bottom: 2px solid #1e3a8a; padding-bottom: 5px; margin-bottom: 15px; }
+    .report-card { 
+        background-color: #ffffff; 
+        padding: 20px; 
+        border-radius: 12px; 
+        border: 1px solid #e0e0e0;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        margin-bottom: 25px;
+    }
+    .indicator-label { font-weight: bold; color: #1e3a8a; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -61,24 +69,31 @@ def fetch_smart_yf(stock_id):
         except: continue
     return pd.DataFrame()
 
-def extract_block(text, block_num):
+# --- 4. 強化版：區塊內容提取邏輯 (取最後一個繁體中文區塊) ---
+def extract_best_block(text, block_num):
     pattern = rf"\[區塊{block_num}\](.*?)\[/區塊{block_num}\]"
-    match = re.search(pattern, text, re.DOTALL)
-    return match.group(1).strip() if match else ""
+    matches = re.findall(pattern, text, re.DOTALL)
+    if not matches: return ""
+    
+    # 從後往前找，第一個包含中文的區塊即為正解
+    for m in reversed(matches):
+        if any('\u4e00' <= char <= '\u9fff' for char in m):
+            return m.strip()
+    return matches[-1].strip()
 
 def call_ai_detective(prompt):
     try:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-        model = genai.GenerativeModel('gemma-4-31b-it')
+        model = genai.GenerativeModel('gemini-1.5-pro')
         response = model.generate_content(prompt)
         return response.text
     except Exception as e: return f"AI 偵探錯誤: {str(e)}"
 
-# --- 4. 主程式 ---
+# --- 5. 主程式 ---
 def main():
     st.title("🕵️‍♂️ 台股 AI 偵探戰情室")
     
-    user_input = st.text_input("🔢 請輸入股號 (例如: 2330)", placeholder="輸入純數字即可").strip()
+    user_input = st.text_input("🔢 請輸入股號", placeholder="輸入 2330 或 2356").strip()
     if st.button("🔍 開始偵查") and user_input:
         with st.spinner("調閱檔案中..."):
             df_all = get_data_from_sheets()
@@ -101,62 +116,84 @@ def main():
         st.table(df_display[['日期', '收盤價', '成交量', 'MA5', 'MA20', 'RSI14']])
 
         if st.button(f"🚀 啟動 {current_id} AI 深度診斷"):
-            with st.spinner("偵探正在進行九項指標交叉比對..."):
+            with st.spinner("偵探正在排版報告，過濾雜訊中..."):
                 data_text = df_display.to_string(index=False)
                 
-                # --- 核心 Prompt：寫死九項指標與教學邏輯 ---
-                prompt = f"""你現在是台股 AI 偵探。禁止英文、禁止廢話。
-請嚴格遵守以下四個標籤格式輸出分析內容：
+                # 更嚴厲的 Prompt，要求 AI 絕對閉嘴，只准輸出標籤內容
+                prompt = f"""你是台股 AI 偵探。輸出內容『嚴禁出現任何英文』。
+禁止草擬、禁止自我檢查、禁止輸出 Input Data。
+請直接填寫以下四個標籤，標籤外『不准有任何文字』：
 
 [區塊1]
-【九項指標趨勢深度判讀】（請務必依序逐一條列分析）：
-1. 5日均線走向
-2. 20日均線走向
-3. RSI14 強弱狀態
-4. KDJ-K值 轉折
-5. KDJ-D值 轉折
-6. MACD 動能變化
-7. 布林通道相對位置
-8. 量價背離關係（分析價格漲跌與成交量增減之配合）
-9. 近5日漲跌連續性與市場心理
+1. 5日均線走向：
+2. 20日均線走向：
+3. RSI14 強弱狀態：
+4. KDJ-K值 轉折：
+5. KDJ-D值 轉折：
+6. MACD 動能變化：
+7. 布林通道相對位置：
+8. 量價背離關係：
+9. 近5日漲跌連續性：
 [/區塊1]
 
 [區塊2]
-【指標矛盾整合與風險抓漏】（偵探教學模式）：
-1. 請針對上述九項指標中，「互相支持」或「互相背離」的資料進行深入分析。
-2. 以教學語氣解釋：如果某項指標看多但另一項看空，代表什麼市場意義？
-3. 揭露目前數據中隱藏的誘多或誘空陷阱。
+1. 指標支持與背離分析：
+2. 矛盾數據教學解釋：
+3. 目前市場誘多/誘空陷阱解析：
 [/區塊2]
 
 [區塊3]
-【全方位操作戰略：雙重劇本】：
-- 保守型劇本：(進場點、停損位、持股邏輯)
-- 激進型劇本：(突破點、目標價、短線策略)
+- 保守型劇本：
+- 激進型劇本：
 [/區塊3]
 
 [區塊4]
-【偵探總結與信心分數】：
-總結：(一句話精闢評語)
-信心分數：(0-100)
+總結：
+信心分數：
 [/區塊4]
 
-待分析數據來源：
+數據來源：
 {data_text}"""
                 
                 ans = call_ai_detective(prompt)
                 
-                b1 = extract_block(ans, 1)
-                b2 = extract_block(ans, 2)
-                b3 = extract_block(ans, 3)
-                b4 = extract_block(ans, 4)
+                # 提取精華內容
+                b1 = extract_best_block(ans, 1)
+                b2 = extract_best_block(ans, 2)
+                b3 = extract_best_block(ans, 3)
+                b4 = extract_best_block(ans, 4)
 
                 st.markdown("---")
-                st.markdown(f"### 🛡️ 偵探診斷報告：{current_id}")
+                st.subheader(f"🛡️ 偵探診斷報告：{current_id}")
                 
-                if b1: st.info(f"{b1}")
-                if b2: st.warning(f"{b2}")
-                if b3: st.success(f"{b3}")
-                if b4: st.error(f"{b4}")
+                # 以專業卡片樣式呈現，並在 Python 端補上標題，確保 AI 漏掉標題也能正常顯示
+                if b1:
+                    with st.container():
+                        st.markdown('<div class="report-card">', unsafe_allow_html=True)
+                        st.markdown('<p class="indicator-label">【第一區塊：九項指標趨勢深度判讀】</p>', unsafe_allow_html=True)
+                        st.write(b1)
+                        st.markdown('</div>', unsafe_allow_html=True)
+
+                if b2:
+                    with st.container():
+                        st.markdown('<div class="report-card">', unsafe_allow_html=True)
+                        st.markdown('<p class="indicator-label">【第二區塊：指標矛盾整合與風險抓漏】</p>', unsafe_allow_html=True)
+                        st.write(b2)
+                        st.markdown('</div>', unsafe_allow_html=True)
+
+                if b3:
+                    with st.container():
+                        st.markdown('<div class="report-card">', unsafe_allow_html=True)
+                        st.markdown('<p class="indicator-label">【第三區塊：全方位操作戰略：雙重劇本】</p>', unsafe_allow_html=True)
+                        st.write(b3)
+                        st.markdown('</div>', unsafe_allow_html=True)
+
+                if b4:
+                    with st.container():
+                        st.markdown('<div class="report-card">', unsafe_allow_html=True)
+                        st.markdown('<p class="indicator-label">【第四區塊：偵探總結與信心分數】</p>', unsafe_allow_html=True)
+                        st.write(b4)
+                        st.markdown('</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
