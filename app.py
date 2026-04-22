@@ -7,13 +7,13 @@ from google.oauth2.service_account import Credentials
 import yfinance as yf
 import re
 
-# --- 1. 視覺優化 (加大字體 & 調整標題) ---
+# --- 1. 視覺優化 (加大字體 & 戰情室配色) ---
 st.set_page_config(page_title="台股 AI 偵探系統 v5.0", layout="wide")
 st.markdown("""
     <style>
-    .stMarkdown p, .stMarkdown li { font-size: 1.25rem !important; line-height: 1.6; }
+    .stMarkdown p, .stMarkdown li { font-size: 1.25rem !important; line-height: 1.7; }
     .stTable { font-size: 1.1rem !important; }
-    .report-block { background-color: #f0f2f6; padding: 20px; border-radius: 10px; margin-bottom: 20px; border-left: 5px solid #ff4b4b; }
+    .report-title { color: #1e3a8a; font-weight: bold; border-bottom: 2px solid #1e3a8a; padding-bottom: 5px; margin-bottom: 15px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -61,25 +61,20 @@ def fetch_smart_yf(stock_id):
         except: continue
     return pd.DataFrame()
 
-# --- 4. 提取區塊內容的精確邏輯 ---
 def extract_block(text, block_num):
-    # 使用正規表達式抓取 [區塊X] 內容 [/區塊X]
     pattern = rf"\[區塊{block_num}\](.*?)\[/區塊{block_num}\]"
     match = re.search(pattern, text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return ""
+    return match.group(1).strip() if match else ""
 
 def call_ai_detective(prompt):
     try:
         genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
         model = genai.GenerativeModel('gemma-4-31b-it')
-        # 嚴格禁止思考過程的系統指令
         response = model.generate_content(prompt)
         return response.text
     except Exception as e: return f"AI 偵探錯誤: {str(e)}"
 
-# --- 5. 主程式 ---
+# --- 4. 主程式 ---
 def main():
     st.title("🕵️‍♂️ 台股 AI 偵探戰情室")
     
@@ -106,35 +101,62 @@ def main():
         st.table(df_display[['日期', '收盤價', '成交量', 'MA5', 'MA20', 'RSI14']])
 
         if st.button(f"🚀 啟動 {current_id} AI 深度診斷"):
-            with st.spinner("正在排版報告，請稍候..."):
+            with st.spinner("偵探正在進行九項指標交叉比對..."):
                 data_text = df_display.to_string(index=False)
-                # 修改 Prompt，要求 AI 使用強製標籤
-                prompt = f"""你現在是台股 AI 偵探。嚴格禁止輸出英文、禁止自我檢查、禁止思考過程。
-請直接填寫以下四個標籤內的內容，嚴禁在標籤外寫任何字：
-[區塊1] 針對九項指標(5/20MA, RSI, 量價等)進行深度判讀 [/區塊1]
-[區塊2] 找出指標間的矛盾與潛在風險 [/區塊2]
-[區塊3] 給出保守型與激進型操作劇本 [/區塊3]
-[區塊4] 一句話總結與信心分數(0-100) [/區塊4]
-數據來源：{data_text}"""
+                
+                # --- 核心 Prompt：寫死九項指標與教學邏輯 ---
+                prompt = f"""你現在是台股 AI 偵探。禁止英文、禁止廢話。
+請嚴格遵守以下四個標籤格式輸出分析內容：
+
+[區塊1]
+【九項指標趨勢深度判讀】（請務必依序逐一條列分析）：
+1. 5日均線走向
+2. 20日均線走向
+3. RSI14 強弱狀態
+4. KDJ-K值 轉折
+5. KDJ-D值 轉折
+6. MACD 動能變化
+7. 布林通道相對位置
+8. 量價背離關係（分析價格漲跌與成交量增減之配合）
+9. 近5日漲跌連續性與市場心理
+[/區塊1]
+
+[區塊2]
+【指標矛盾整合與風險抓漏】（偵探教學模式）：
+1. 請針對上述九項指標中，「互相支持」或「互相背離」的資料進行深入分析。
+2. 以教學語氣解釋：如果某項指標看多但另一項看空，代表什麼市場意義？
+3. 揭露目前數據中隱藏的誘多或誘空陷阱。
+[/區塊2]
+
+[區塊3]
+【全方位操作戰略：雙重劇本】：
+- 保守型劇本：(進場點、停損位、持股邏輯)
+- 激進型劇本：(突破點、目標價、短線策略)
+[/區塊3]
+
+[區塊4]
+【偵探總結與信心分數】：
+總結：(一句話精闢評語)
+信心分數：(0-100)
+[/區塊4]
+
+待分析數據來源：
+{data_text}"""
                 
                 ans = call_ai_detective(prompt)
                 
-                # 分別提取四個區塊
                 b1 = extract_block(ans, 1)
                 b2 = extract_block(ans, 2)
                 b3 = extract_block(ans, 3)
                 b4 = extract_block(ans, 4)
 
                 st.markdown("---")
-                st.subheader(f"🛡️ 偵探診斷報告：{current_id}")
+                st.markdown(f"### 🛡️ 偵探診斷報告：{current_id}")
                 
-                if b1: st.info(f"**第一區塊：【九項指標趨勢深度判讀】**\n\n{b1}")
-                if b2: st.warning(f"**第二區塊：【指標矛盾整合與風險抓漏】**\n\n{b2}")
-                if b3: st.success(f"**第三區塊：【全方位操作戰略：雙重劇本】**\n\n{b3}")
-                if b4: st.error(f"**第四區塊：【偵探總結與信心分數】**\n\n{b4}")
-                
-                if not b1 and not b2: # 如果標籤提取失敗，顯示原始內容作為保險
-                    st.write(ans)
+                if b1: st.info(f"{b1}")
+                if b2: st.warning(f"{b2}")
+                if b3: st.success(f"{b3}")
+                if b4: st.error(f"{b4}")
 
 if __name__ == "__main__":
     main()
