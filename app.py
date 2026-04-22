@@ -120,7 +120,7 @@ def main():
                 data_text = df_display.to_string(index=False)
                 
                 # 更嚴厲的 Prompt，要求 AI 絕對閉嘴，只准輸出標籤內容
-                prompt = f"""你是台股 AI 偵探。輸出內容『嚴禁出現任何英文』。
+                prompt = f"""你是台股 AI 偵探。輸出內容『主要以繁體中文敘述』。
 禁止草擬、禁止自我檢查、禁止輸出 Input Data。
 請直接填寫以下四個標籤，標籤外『不准有任何文字』：
 
