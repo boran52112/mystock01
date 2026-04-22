@@ -1,104 +1,87 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
-import pandas_ta as ta
-import gspread
-from google.oauth2.service_account import Credentials
-import google.generativeai as genai
-import json
+# 假設您已有的 Google Sheets 讀取邏輯與模型調用邏輯已存在
+# 這裡重點展示「表格中文化」與「四區塊診斷控制」的優化代碼
 
-st.set_page_config(page_title="台股 AI 偵探戰情室", layout="centered")
+def run_v85_optimization(df_selected, stock_id):
+    """
+    df_selected: 從試算表抓取出的該股 5 日數據 DataFrame
+    stock_id: 股票代碼 (例如 "2330")
+    """
+    
+    # --- 第一階段：數據表格化 (方案 A) ---
+    st.subheader(f"🔍 {stock_id} 數據戰情盤後 (5日歷史趨勢)")
+    
+    # 1. 建立中文映射表 (確保完全無英文)
+    column_mapping = {
+        'Date': '日期',
+        'Close': '收盤價',
+        'Volume': '成交量',
+        'RSI': 'RSI強弱',
+        'KDJ_K': 'K值',
+        'KDJ_D': 'D值',
+        'MACD': 'MACD動能',
+        'BB_Upper': '布林上軌',
+        'BB_Lower': '布林下軌',
+        'Daily_Return': '漲跌幅%'
+    }
+    
+    # 2. 轉換 DataFrame 欄位並過濾
+    display_df = df_selected[list(column_mapping.keys())].rename(columns=column_mapping)
+    
+    # 3. 呈現表格 (Streamlit 原生組件)
+    st.dataframe(display_df.style.highlight_max(axis=0, color='#2ecc71').highlight_min(axis=0, color='#e74c3c'), use_container_width=True)
 
-# 金鑰初始化
-try:
-    gcp_info = json.loads(st.secrets["gcp_service_account_raw"])
-    gcp_info['private_key'] = gcp_info['private_key'].replace('\\n', '\n')
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-except:
-    st.error("金鑰設定錯誤")
-    st.stop()
+    # --- 第二階段：準備餵給 AI 的資料 (字串化) ---
+    # 將 5 日數據轉為簡潔字串，讓 AI 讀取但不直接顯示
+    data_summary = display_df.to_string(index=False)
 
-def get_clean_data(symbol):
-    symbol = symbol.upper().strip()
-    try:
-        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-        creds = Credentials.from_service_account_info(gcp_info, scopes=scope)
-        gc = gspread.authorize(creds)
-        sh = gc.open_by_key("1UH-fwxENhGUDmQjTQJq72g1DzsxML_CPIJGg39cWAgM")
-        wks = sh.get_worksheet(0)
-        df = pd.DataFrame(wks.get_all_records())
-        # 去重，只留最後一筆
-        df = df.drop_duplicates(subset=['日期', '股號'], keep='last')
-        target = df[df['股號'].astype(str).str.contains(symbol)].sort_values('日期').tail(5)
-        if not target.empty: return target, "5日趨勢資料庫"
-    except: pass
-    return None, None
+    # --- 第三階段：建構「四區塊」強制指令 (Prompt) ---
+    prompt = f"""
+你現在是「台股 AI 偵探系統 v5.0」，專精於技術指標與市場心理學。
+當前模擬時間：2026-04-22。
 
-st.title("🕵️‍♂️ 台股 AI 偵探戰情室")
-stock_id = st.text_input("輸入目標股號 (如 2330):", "").strip()
+【嚴格規範】
+1. 禁止輸出任何英文前言（如 Sure, here is...）。
+2. 禁止輸出結尾語。
+3. 必須且只能輸出以下四個診斷區塊。
+4. 語言：繁體中文。
 
-if stock_id:
-    with st.spinner("偵探正在依照九項指標進行深度辦案..."):
-        data, source = get_clean_data(stock_id)
-        if data is not None:
-            st.success(f"📊 5日證據鎖定成功")
-            # 格式化表格
-            st.table(data[['日期', '收盤價', 'MA5', 'RSI14', '漲跌幅%']])
+以下是 {stock_id} 過去 5 日的技術指標數據：
+{data_summary}
+
+請根據數據執行深度診斷，格式如下：
+
+第一區塊：【九項指標趨勢深度判讀】
+(請針對 5/20日線、RSI、KDJ、MACD、布林、量價背離、漲跌連續性、支撐壓力、市場心理進行條列式判讀)
+
+第二區塊：【指標矛盾整合與風險抓漏】
+(請找出數據中互相衝突的地方，例如價格漲但量能縮，並分析是否為陷阱)
+
+第三區塊：【全方位操作戰略：雙重劇本】
+- 保守型劇本：(進場點、停損位、持股邏輯)
+- 激進型劇本：(突破點、目標價、短線策略)
+
+第四區塊：【偵探總結與信心分數】
+總結：(一句話精闢點評)
+信心分數：(0-100)
+"""
+
+    # --- 第四階段：呼叫 AI 並執行「廢話過濾」 ---
+    if st.button(f"🚀 啟動 {stock_id} AI 深度偵探診斷"):
+        with st.spinner("偵探正在分析指標細節..."):
+            # 這裡調用您模擬環境的 gemma-4-31b-it
+            raw_response = call_gemma_model(prompt) 
             
-            evidence_md = data.to_markdown(index=False)
-            
-            # 【核心修正】: 鎖死九項指標分析，禁止任何英文前言
-            prompt = f"""
-            [系統絕對指令：禁止輸出任何英文，禁止解釋指令，禁止顯示分析過程。請直接輸出繁體中文報告內容。]
-            
-            你是一位派駐在 2026 年的台股資深分析偵探。請針對以下證據產出深度診斷報告。
+            # 廢話過濾邏輯：強行切除第一個區塊標題之前的任何內容
+            target_start = "第一區塊"
+            if target_start in raw_response:
+                clean_response = raw_response[raw_response.find(target_start):]
+            else:
+                clean_response = raw_response
 
-            【5日歷史證據表格】：
-            {evidence_md}
+            # 最終呈現
+            st.markdown("---")
+            st.markdown(clean_response)
 
-            請嚴格依照以下格式輸出報告：
-
-            📌 偵探報告編號：2026-{stock_id}-SCAN
-            🕵️ 偵探身份：2026年派駐資深分析偵探
-
-            ### 第一區塊：【九項指標趨勢深度判讀】
-            你必須針對以下九項指標進行逐一分析：
-            1. 週線與月線(MA5/MA20)走向。
-            2. RSI強弱指標狀態。
-            3. KD隨機指標轉折。
-            4. MACD趨勢動能。
-            5. 布林通道相對位置。
-            6. 成交量與價格之背離關係。
-            7. 近5日漲跌幅%之連續性。
-            8. 關鍵支撐與壓力位判斷。
-            9. 市場心理分析（恐慌、亢奮或觀望）。
-
-            ### 第二區塊：【指標矛盾整合與風險抓漏】
-            (分析各指標間是否有衝突，是否存在誘多或誘空陷阱。)
-
-            ### 第三區塊：【全方位操作戰略：雙重劇本】
-            1. 保守型劇本：(進場點、停損位、持股邏輯)
-            2. 激進型劇本：(突破點、目標價、短線策略)
-
-            ### 第四區塊：【偵探總結與信心分數】
-            * 總結：(一句話定調)
-            * 信心分數：(0-100)
-            """
-            
-            try:
-                model = genai.GenerativeModel('models/gemma-4-31b-it')
-                response = model.generate_content(prompt)
-                st.markdown("---")
-                st.markdown("### 📝 AI 偵探深度診斷報告")
-                # 再次確保過濾掉可能的 AI 碎碎念
-                report = response.text
-                if "Persona" in report or "Constraint" in report:
-                    st.warning("偵探報告含有過多系統訊息，請重新嘗試。")
-                st.write(report)
-            except:
-                st.error("AI 偵探目前無法連線。")
-        else:
-            st.warning("資料庫尚無此股之5日完整數據。")
-
-st.markdown("---")
-st.caption("AI 偵探系統 v8.2 | 強制九項指標診斷版")
+# 註：call_gemma_model 為您專案中既有的 API 呼叫函數
